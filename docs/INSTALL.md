@@ -247,6 +247,38 @@ The package also has `firefox/distribution/policies.json`, which is optional and
 It changes the default search engine to DuckDuckGo, removes other search engines and installs
 uBlock Origin. To undo the layout, delete the three items above and restart Firefox.
 
+## 11. Android apps (Waydroid)
+
+The kernel config already has what Waydroid needs: binder, PSI, nftables NAT and Android's policy
+routing and packet filters. Without the policy routing, Android has no internet.
+
+```sh
+pacman -S --needed waydroid dnsmasq wtype
+waydroid init -s GAPPS        # or leave out -s GAPPS for no Google apps; downloads about 1.5 GB
+systemctl enable --now waydroid-container
+```
+
+Then open **Waydroid** from the app grid as `alarm`. Android 13 takes about 20 seconds to start.
+If its sound is too quiet, raise the volume inside Android's settings.
+
+For Google Play, get the device ID and register it at
+<https://www.google.com/android/uncertified>, wait a few minutes, then restart Android:
+
+```sh
+waydroid shell -- sqlite3 /data/data/com.google.android.gsf/databases/gservices.db \
+    "select value from main where name = 'android_id';"
+```
+
+`rootfs/` has a **Stop Android** launcher (`/usr/local/bin/waydroid-stop`). Android keeps using
+battery while it runs, even with its window closed.
+
+## 12. No app loading splash
+
+Phosh shows a splash until an app's window appears, which often outlasts the app's own startup
+here. `op9-no-splash` writes copies of the launchers that skip it into
+`~/.local/share/applications`, and the pacman hook in `rootfs/` reruns it after installs. Run it
+once as `alarm`, and `op9-no-splash --undo` to remove the copies.
+
 ## How this phone got here
 
 The phone first ran Linux from a `linux` logical partition inside `super`, was built up over USB,

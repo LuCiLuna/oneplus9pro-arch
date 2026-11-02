@@ -42,6 +42,8 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
 | Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
 | Firefox | ✅ | Phone layout with mobile sites, using `mobile-config-firefox`; smooth after the scheduler fix. YouTube's mobile page clips its left edge unless zoomed to 80% |
+| Android apps | ✅ | Waydroid with Android 13 (LineageOS 20): GPU acceleration, internet, sound and Google Play. A **Stop Android** launcher shuts it down |
+| App launching | ✅ | No loading splash, since apps here usually open before it would go away |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | Earpiece, USB-C headset | ❌ | Not finished |
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |

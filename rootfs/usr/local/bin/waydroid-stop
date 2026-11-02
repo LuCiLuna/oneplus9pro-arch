@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stops the Android session; it starts again the next time Waydroid or an Android app is opened.
+if waydroid session stop; then
+	notify-send -a Waydroid -i waydroid "Android stopped"
+else
+	notify-send -a Waydroid -i waydroid "Couldn't stop Android"
+fi
+
+# Phosh folds the app grid away for a launched app and waits for its window. There's none here,
+# so bring the grid back, unless it already is (the shortcut toggles it).
+overview=$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+	--method org.freedesktop.DBus.Properties.Get org.gnome.Shell OverviewActive 2>/dev/null)
+case $overview in
+*false*) wtype -M logo -k a -m logo ;;
+esac

@@ -1,0 +1,23 @@
+#!/bin/bash
+# Phosh can't turn off its app loading splash, but skips apps that don't announce their startup.
+# Writes overrides for the launcher's apps in the user's folder. Undo: op9-no-splash --undo
+dest=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+marker=X-Op9-NoSplash=true
+mkdir -p "$dest"
+
+for f in "$dest"/*.desktop; do
+	[ -e "$f" ] && grep -q "^$marker" "$f" || continue
+	if [ "$1" = --undo ] || [ ! -e "/usr/share/applications/${f##*/}" ]; then
+		rm -f "$f"
+	fi
+done
+[ "$1" = --undo ] && exit 0
+
+for src in /usr/share/applications/*.desktop; do
+	grep -q '^StartupNotify=true' "$src" || continue
+	grep -q '^NoDisplay=true' "$src" && continue
+	f=$dest/${src##*/}
+	# leave overrides that someone wrote by hand
+	[ -e "$f" ] && ! grep -q "^$marker" "$f" && continue
+	sed -e 's/^StartupNotify=true/StartupNotify=false/' -e "/^\[Desktop Entry\]/a $marker" "$src" > "$f"
+done

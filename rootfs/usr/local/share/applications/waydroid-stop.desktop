@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Stop Android
+Comment=Shut down Android until it's next opened
+Exec=/usr/local/bin/waydroid-stop
+Icon=system-shutdown-symbolic
+Categories=System;
+StartupNotify=false

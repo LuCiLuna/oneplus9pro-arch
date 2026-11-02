@@ -34,6 +34,10 @@ series and haven't been rerun since.
   within 5 seconds.
 - **YouTube in Firefox:** the mobile page clips its left edge at the default zoom. Zooming that site
   to 80% fixes it. The cause wasn't measured. Wikipedia, BBC News and a test page fit correctly.
+- **Waydroid:** Android can't use the cameras, phone calls or Bluetooth directly. Some apps refuse to
+  run because Waydroid doesn't pass Google's device integrity checks. Waydroid also makes the camera
+  and video decoder devices readable and writable by every user. Android 17 wasn't tried: no ARM64
+  image exists, and others report its window never appears on Waydroid 1.6.3.
 - **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
   and a USB 3 OTG adapter both work.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
