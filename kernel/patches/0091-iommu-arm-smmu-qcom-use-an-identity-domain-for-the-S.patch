@@ -1,0 +1,28 @@
+From fd6c125adbd69aa2084a53cdee6c4af4120e69aa Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 08:42:40 +0000
+Subject: [PATCH 091/110] iommu/arm-smmu-qcom: use an identity domain for the
+ SM8350 MDSS
+
+Like the other MDSS generations, the display controller on SM8350 scans
+out the bootloader splash at boot. With a translated default domain the
+SMMU drops that mapping as soon as the MDSS device is added and the
+splash fetches fault until msm sets up its own domain.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+index 795e8ec7e8f..3dd8335c4fd 100644
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+@@ -425,6 +425,7 @@ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
+ 	{ .compatible = "qcom,sm6375-mdss" },
+ 	{ .compatible = "qcom,sm8150-mdss" },
+ 	{ .compatible = "qcom,sm8250-mdss" },
++	{ .compatible = "qcom,sm8350-mdss" },
+ 	{ .compatible = "qcom,sm8450-mdss" },
+ 	{ .compatible = "qcom,x1e80100-mdss" },
+ 	{ }

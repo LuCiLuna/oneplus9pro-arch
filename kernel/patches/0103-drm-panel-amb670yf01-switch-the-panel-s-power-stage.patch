@@ -1,0 +1,79 @@
+From d83b061952ce5561184c2a26f4aa9853981cbe81 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 09:39:21 -0600
+Subject: [PATCH 103/110] drm/panel: amb670yf01: switch the panel's power stage
+
+Stock names GPIO 25 qcom,platform-panel-vout-gpio for this panel. Nothing
+in mainline claimed it, so it stayed as the bootloader left it: high, with
+the power stage on through blanking and suspend while the panel sat in reset.
+
+Drive it from prepare and unprepare. Saves about 12 mA from the 8 V battery
+in suspend (58 mA to 46 mA).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts |  1 +
+ drivers/gpu/drm/panel/panel-samsung-amb670yf01.c     | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index fe7be31ac23..73a835ead27 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -421,6 +421,7 @@ fp_display {
+ 
+ &display_panel {
+ 	compatible = "samsung,amb670yf01";
++	vout-gpios = <&tlmm 25 GPIO_ACTIVE_HIGH>;
+ 	status = "okay";
+ };
+ 
+diff --git a/drivers/gpu/drm/panel/panel-samsung-amb670yf01.c b/drivers/gpu/drm/panel/panel-samsung-amb670yf01.c
+index 1c513e882d4..8b38cdf3fae 100644
+--- a/drivers/gpu/drm/panel/panel-samsung-amb670yf01.c
++++ b/drivers/gpu/drm/panel/panel-samsung-amb670yf01.c
+@@ -37,6 +37,7 @@ struct amb670yf01 {
+ 	bool wqhd;	/* the mode in use: otherwise the panel scales up 1080x2412 */
+ 	int hz;
+ 	struct gpio_desc *reset_gpio;
++	struct gpio_desc *vout_gpio;
+ 	struct regulator_bulk_data *supplies;
+ 	struct dentry *debugfs;
+ 	u8 rbuf[32];
+@@ -216,11 +217,15 @@ static int amb670yf01_prepare(struct drm_panel *panel)
+ 	if (ret < 0)
+ 		return ret;
+ 
++	gpiod_set_value_cansleep(ctx->vout_gpio, 1);
++	usleep_range(10000, 11000);
++
+ 	amb670yf01_reset(ctx);
+ 
+ 	ret = amb670yf01_on(ctx);
+ 	if (ret < 0) {
+ 		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++		gpiod_set_value_cansleep(ctx->vout_gpio, 0);
+ 		regulator_bulk_disable(ARRAY_SIZE(amb670yf01_supplies), ctx->supplies);
+ 		return ret;
+ 	}
+@@ -233,6 +238,7 @@ static int amb670yf01_unprepare(struct drm_panel *panel)
+ 	struct amb670yf01 *ctx = to_amb670yf01(panel);
+ 
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	gpiod_set_value_cansleep(ctx->vout_gpio, 0);
+ 	regulator_bulk_disable(ARRAY_SIZE(amb670yf01_supplies), ctx->supplies);
+ 
+ 	return 0;
+@@ -453,6 +459,12 @@ static int amb670yf01_probe(struct mipi_dsi_device *dsi)
+ 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
+ 				     "Failed to get reset-gpios\n");
+ 
++	/* The panel's power stage, left on by the bootloader */
++	ctx->vout_gpio = devm_gpiod_get_optional(dev, "vout", GPIOD_OUT_HIGH);
++	if (IS_ERR(ctx->vout_gpio))
++		return dev_err_probe(dev, PTR_ERR(ctx->vout_gpio),
++				     "Failed to get vout-gpios\n");
++
+ 	ctx->dsi = dsi;
+ 	mipi_dsi_set_drvdata(dsi, ctx);
+ 

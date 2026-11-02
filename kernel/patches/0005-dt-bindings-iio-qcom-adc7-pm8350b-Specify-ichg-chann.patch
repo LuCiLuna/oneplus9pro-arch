@@ -1,0 +1,22 @@
+From ac7e58587164d9136d59f15e9f2d1891937d6aa3 Mon Sep 17 00:00:00 2001
+From: Nia Espera <nespera@igalia.com>
+Date: Sat, 11 Nov 2023 23:37:49 +0100
+Subject: [PATCH 005/110] dt-bindings: iio: qcom: adc7-pm8350b: Specify ichg
+ channel id
+
+---
+ include/dt-bindings/iio/qcom,spmi-adc7-pm8350b.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/dt-bindings/iio/qcom,spmi-adc7-pm8350b.h b/include/dt-bindings/iio/qcom,spmi-adc7-pm8350b.h
+index 57c7977666d..d43104a8883 100644
+--- a/include/dt-bindings/iio/qcom,spmi-adc7-pm8350b.h
++++ b/include/dt-bindings/iio/qcom,spmi-adc7-pm8350b.h
+@@ -35,6 +35,7 @@
+ #define PM8350B_ADC7_CC1_ID			(PM8350B_SID << 8 | ADC7_CC1_ID)
+ #define PM8350B_ADC7_VREF_BAT_THERM		(PM8350B_SID << 8 | ADC7_VREF_BAT_THERM)
+ #define PM8350B_ADC7_IIN_FB			(PM8350B_SID << 8 | ADC7_IIN_FB)
++#define PM8350B_ADC7_ICHG_FB			(PM8350B_SID << 8 | ADC7_ICHG_FB)
+ 
+ /* 30k pull-up1 */
+ #define PM8350B_ADC7_AMUX_THM1_30K_PU		(PM8350B_SID << 8 | ADC7_AMUX_THM1_30K_PU)

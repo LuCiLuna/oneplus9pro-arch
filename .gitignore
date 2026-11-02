@@ -1,0 +1,19 @@
+# Build output
+/work/
+*.img
+*.ko
+*.o
+__pycache__/
+
+# Never commit firmware, partition dumps or per-device data
+*.mbn
+*.mdt
+*.b[0-9][0-9]
+*.elf
+*.tlv
+*.dtb
+*.dtbo
+*.tgz
+*.tar.gz
+wlan_mac.bin
+*.nmconnection

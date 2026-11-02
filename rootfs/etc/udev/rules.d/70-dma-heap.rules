@@ -1,0 +1,2 @@
+# libcamera software ISP (run by the user session) allocates from the dma-buf heaps
+SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"

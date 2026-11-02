@@ -1,0 +1,968 @@
+From 4cf23216ae3a47c38efca0c9b2e0183e6c7254ef Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 00:46:02 +0000
+Subject: [PATCH 063/110] media: i2c: add OmniVision OV08A10 driver
+
+The OV08A10 is the 8 MP telephoto sensor of the OnePlus 9 Pro. One
+3264x2448 BGGR mode at 30 fps over two D-PHY lanes at 1.6 Gbps, with the
+register settings from the phone's camera module data. Analogue gain is
+gain * 256 from 1x to 15.5x, as in the vendor sensor library;
+exposure is in lines.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/Kconfig   |  11 +
+ drivers/media/i2c/Makefile  |   1 +
+ drivers/media/i2c/ov08a10.c | 909 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 921 insertions(+)
+ create mode 100644 drivers/media/i2c/ov08a10.c
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index efe038849a7..251a7e7f49a 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -456,6 +456,17 @@ config VIDEO_OV02C10
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called ov02c10.
+ 
++config VIDEO_OV08A10
++	tristate "OmniVision OV08A10 sensor support"
++	depends on GPIOLIB
++	select V4L2_CCI_I2C
++	help
++	  This is a Video4Linux2 sensor driver for the OmniVision
++	  OV08A10 8 MP camera.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called ov08a10.
++
+ config VIDEO_OV08D10
+         tristate "OmniVision OV08D10 sensor support"
+         help
+diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
+index e00debccb9d..bb6abc63d95 100644
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -92,6 +92,7 @@ obj-$(CONFIG_VIDEO_OV01A10) += ov01a10.o
+ obj-$(CONFIG_VIDEO_OV02A10) += ov02a10.o
+ obj-$(CONFIG_VIDEO_OV02C10) += ov02c10.o
+ obj-$(CONFIG_VIDEO_OV02E10) += ov02e10.o
++obj-$(CONFIG_VIDEO_OV08A10) += ov08a10.o
+ obj-$(CONFIG_VIDEO_OV08D10) += ov08d10.o
+ obj-$(CONFIG_VIDEO_OV08X40) += ov08x40.o
+ obj-$(CONFIG_VIDEO_OV13858) += ov13858.o
+diff --git a/drivers/media/i2c/ov08a10.c b/drivers/media/i2c/ov08a10.c
+new file mode 100644
+index 00000000000..c05511ccbc0
+--- /dev/null
++++ b/drivers/media/i2c/ov08a10.c
+@@ -0,0 +1,909 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * OmniVision OV08A10 image sensor driver
++ *
++ * Register settings come from the OnePlus 9 Pro telephoto module data
++ * (com.qti.sensormodule.lemonadep.qtech_ov08a10.bin): 3264x2448 at 30 fps
++ * over two MIPI D-PHY lanes at 1.6 Gbps.
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/pm_runtime.h>
++#include <linux/property.h>
++#include <linux/regulator/consumer.h>
++#include <media/v4l2-cci.h>
++#include <media/v4l2-ctrls.h>
++#include <media/v4l2-fwnode.h>
++#include <media/v4l2-subdev.h>
++
++#define OV08A10_REG_MODE_SELECT		CCI_REG8(0x0100)
++#define OV08A10_MODE_STANDBY		0x00
++#define OV08A10_MODE_STREAMING		0x01
++
++#define OV08A10_REG_SOFTWARE_RESET	CCI_REG8(0x0103)
++
++#define OV08A10_REG_CHIP_ID		CCI_REG16(0x300b)
++#define OV08A10_CHIP_ID			0x0841
++
++#define OV08A10_REG_VTS			CCI_REG16(0x380e)
++#define OV08A10_VTS_MAX			0xffff
++
++/* in lines */
++#define OV08A10_REG_EXPOSURE		CCI_REG16(0x3501)
++#define OV08A10_EXPOSURE_MIN		8
++#define OV08A10_EXPOSURE_MARGIN		24
++
++/* gain * 256, 1x to 15.5x */
++#define OV08A10_REG_ANALOG_GAIN		CCI_REG16(0x3508)
++#define OV08A10_ANA_GAIN_MIN		0x0100
++#define OV08A10_ANA_GAIN_MAX		0x0f80
++#define OV08A10_ANA_GAIN_DEFAULT	0x0100
++
++#define OV08A10_REG_TEST_PATTERN	CCI_REG8(0x5081)
++
++#define OV08A10_EXT_CLK			19200000
++/* 19.2 MHz MCLK, 1.6 Gbps per lane */
++#define OV08A10_LINK_FREQ		800000000
++/*
++ * 160 MHz VT clock with HTS 902; libcamera works in pixels, so report a
++ * line of 4 * 902 pixels at four times the rate.
++ */
++#define OV08A10_PIXEL_RATE		640000000
++#define OV08A10_LLP			3608
++
++#define OV08A10_NATIVE_WIDTH		3296
++#define OV08A10_NATIVE_HEIGHT		2480
++
++static const char * const ov08a10_supply_names[] = {
++	"dovdd",
++	"avdd",
++	"dvdd",
++};
++
++struct ov08a10_mode {
++	u32 width;
++	u32 height;
++	u32 vts;
++	struct v4l2_rect crop;
++	const struct cci_reg_sequence *regs;
++	unsigned int num_regs;
++};
++
++struct ov08a10 {
++	struct device *dev;
++	struct regmap *regmap;
++	struct v4l2_subdev sd;
++	struct media_pad pad;
++
++	struct clk *clk;
++	struct gpio_desc *reset_gpio;
++	struct regulator_bulk_data supplies[ARRAY_SIZE(ov08a10_supply_names)];
++
++	struct v4l2_ctrl_handler ctrls;
++	struct v4l2_ctrl *vblank;
++	struct v4l2_ctrl *exposure;
++};
++
++#define to_ov08a10(_sd) container_of(_sd, struct ov08a10, sd)
++
++static const struct cci_reg_sequence ov08a10_init_regs[] = {
++	{ CCI_REG8(0x0303), 0x04 },
++	{ CCI_REG8(0x0304), 0x01 },
++	{ CCI_REG8(0x0305), 0xf4 },
++	{ CCI_REG8(0x0306), 0x01 },
++	{ CCI_REG8(0x0307), 0x00 },
++	{ CCI_REG8(0x0323), 0x04 },
++	{ CCI_REG8(0x0324), 0x01 },
++	{ CCI_REG8(0x0325), 0x90 },
++	{ CCI_REG8(0x4837), 0x0a },
++	{ CCI_REG8(0x3009), 0x06 },
++	{ CCI_REG8(0x3012), 0x21 },
++	{ CCI_REG8(0x301e), 0x98 },
++	{ CCI_REG8(0x3026), 0x10 },
++	{ CCI_REG8(0x3027), 0x08 },
++	{ CCI_REG8(0x3106), 0x80 },
++	{ CCI_REG8(0x3216), 0x01 },
++	{ CCI_REG8(0x3217), 0x00 },
++	{ CCI_REG8(0x3218), 0x00 },
++	{ CCI_REG8(0x3219), 0x55 },
++	{ CCI_REG8(0x3400), 0x00 },
++	{ CCI_REG8(0x3408), 0x02 },
++	{ CCI_REG8(0x340c), 0x20 },
++	{ CCI_REG8(0x340d), 0x00 },
++	{ CCI_REG8(0x3410), 0x00 },
++	{ CCI_REG8(0x3412), 0x00 },
++	{ CCI_REG8(0x3413), 0x00 },
++	{ CCI_REG8(0x3414), 0x00 },
++	{ CCI_REG8(0x3415), 0x00 },
++	{ CCI_REG8(0x3501), 0x17 },
++	{ CCI_REG8(0x3502), 0x04 },
++	{ CCI_REG8(0x3504), 0x08 },
++	{ CCI_REG8(0x3508), 0x04 },
++	{ CCI_REG8(0x3509), 0x00 },
++	{ CCI_REG8(0x353c), 0x04 },
++	{ CCI_REG8(0x353d), 0x00 },
++	{ CCI_REG8(0x3600), 0x20 },
++	{ CCI_REG8(0x3608), 0x87 },
++	{ CCI_REG8(0x3609), 0xe0 },
++	{ CCI_REG8(0x360a), 0x66 },
++	{ CCI_REG8(0x360c), 0x20 },
++	{ CCI_REG8(0x361a), 0x80 },
++	{ CCI_REG8(0x361b), 0xd0 },
++	{ CCI_REG8(0x361c), 0x11 },
++	{ CCI_REG8(0x361d), 0x63 },
++	{ CCI_REG8(0x361e), 0x76 },
++	{ CCI_REG8(0x3620), 0x50 },
++	{ CCI_REG8(0x3621), 0x0a },
++	{ CCI_REG8(0x3622), 0x8a },
++	{ CCI_REG8(0x3625), 0x88 },
++	{ CCI_REG8(0x3626), 0x49 },
++	{ CCI_REG8(0x362a), 0x80 },
++	{ CCI_REG8(0x3632), 0x00 },
++	{ CCI_REG8(0x3633), 0x10 },
++	{ CCI_REG8(0x3634), 0x10 },
++	{ CCI_REG8(0x3635), 0x10 },
++	{ CCI_REG8(0x3636), 0x0e },
++	{ CCI_REG8(0x3659), 0x11 },
++	{ CCI_REG8(0x365a), 0x23 },
++	{ CCI_REG8(0x365b), 0x38 },
++	{ CCI_REG8(0x365c), 0x80 },
++	{ CCI_REG8(0x3661), 0x0c },
++	{ CCI_REG8(0x3663), 0x40 },
++	{ CCI_REG8(0x3665), 0x12 },
++	{ CCI_REG8(0x3668), 0xf0 },
++	{ CCI_REG8(0x3669), 0x0a },
++	{ CCI_REG8(0x366a), 0x10 },
++	{ CCI_REG8(0x366b), 0x43 },
++	{ CCI_REG8(0x366c), 0x02 },
++	{ CCI_REG8(0x3674), 0x00 },
++	{ CCI_REG8(0x3706), 0x1b },
++	{ CCI_REG8(0x3709), 0x25 },
++	{ CCI_REG8(0x370b), 0x3f },
++	{ CCI_REG8(0x370c), 0x03 },
++	{ CCI_REG8(0x3713), 0x02 },
++	{ CCI_REG8(0x3714), 0x63 },
++	{ CCI_REG8(0x3726), 0x20 },
++	{ CCI_REG8(0x373b), 0x06 },
++	{ CCI_REG8(0x373d), 0x0a },
++	{ CCI_REG8(0x3752), 0x00 },
++	{ CCI_REG8(0x3753), 0x00 },
++	{ CCI_REG8(0x3754), 0xee },
++	{ CCI_REG8(0x3767), 0x08 },
++	{ CCI_REG8(0x3768), 0x0e },
++	{ CCI_REG8(0x3769), 0x02 },
++	{ CCI_REG8(0x376a), 0x00 },
++	{ CCI_REG8(0x376b), 0x00 },
++	{ CCI_REG8(0x37d9), 0x08 },
++	{ CCI_REG8(0x37dc), 0x00 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x00 },
++	{ CCI_REG8(0x3803), 0x08 },
++	{ CCI_REG8(0x3804), 0x0c },
++	{ CCI_REG8(0x3805), 0xdf },
++	{ CCI_REG8(0x3806), 0x09 },
++	{ CCI_REG8(0x3807), 0xa7 },
++	{ CCI_REG8(0x3808), 0x0c },
++	{ CCI_REG8(0x3809), 0xc0 },
++	{ CCI_REG8(0x380a), 0x09 },
++	{ CCI_REG8(0x380b), 0x90 },
++	{ CCI_REG8(0x380c), 0x03 },
++	{ CCI_REG8(0x380d), 0x86 },
++	{ CCI_REG8(0x380e), 0x17 },
++	{ CCI_REG8(0x380f), 0x1a },
++	{ CCI_REG8(0x3810), 0x00 },
++	{ CCI_REG8(0x3811), 0x11 },
++	{ CCI_REG8(0x3812), 0x00 },
++	{ CCI_REG8(0x3813), 0x08 },
++	{ CCI_REG8(0x3814), 0x11 },
++	{ CCI_REG8(0x3815), 0x11 },
++	{ CCI_REG8(0x3820), 0x80 },
++	{ CCI_REG8(0x3821), 0x04 },
++	{ CCI_REG8(0x3823), 0x00 },
++	{ CCI_REG8(0x3824), 0x00 },
++	{ CCI_REG8(0x3825), 0x00 },
++	{ CCI_REG8(0x3826), 0x00 },
++	{ CCI_REG8(0x3827), 0x00 },
++	{ CCI_REG8(0x382b), 0x08 },
++	{ CCI_REG8(0x3834), 0xf4 },
++	{ CCI_REG8(0x3835), 0x04 },
++	{ CCI_REG8(0x3836), 0x14 },
++	{ CCI_REG8(0x3837), 0x04 },
++	{ CCI_REG8(0x3898), 0x00 },
++	{ CCI_REG8(0x38a0), 0x02 },
++	{ CCI_REG8(0x38a1), 0x02 },
++	{ CCI_REG8(0x38a2), 0x02 },
++	{ CCI_REG8(0x38a3), 0x04 },
++	{ CCI_REG8(0x38c3), 0x00 },
++	{ CCI_REG8(0x38c4), 0x00 },
++	{ CCI_REG8(0x38c5), 0x00 },
++	{ CCI_REG8(0x38c6), 0x00 },
++	{ CCI_REG8(0x38c7), 0x00 },
++	{ CCI_REG8(0x38c8), 0x00 },
++	{ CCI_REG8(0x3d8c), 0x60 },
++	{ CCI_REG8(0x3d8d), 0x30 },
++	{ CCI_REG8(0x3f00), 0x8b },
++	{ CCI_REG8(0x4000), 0xf7 },
++	{ CCI_REG8(0x4001), 0x60 },
++	{ CCI_REG8(0x4002), 0x00 },
++	{ CCI_REG8(0x4003), 0x40 },
++	{ CCI_REG8(0x4008), 0x02 },
++	{ CCI_REG8(0x4009), 0x11 },
++	{ CCI_REG8(0x400a), 0x01 },
++	{ CCI_REG8(0x400b), 0x00 },
++	{ CCI_REG8(0x4020), 0x00 },
++	{ CCI_REG8(0x4021), 0x00 },
++	{ CCI_REG8(0x4022), 0x00 },
++	{ CCI_REG8(0x4023), 0x00 },
++	{ CCI_REG8(0x4024), 0x00 },
++	{ CCI_REG8(0x4025), 0x00 },
++	{ CCI_REG8(0x4026), 0x00 },
++	{ CCI_REG8(0x4027), 0x00 },
++	{ CCI_REG8(0x4030), 0x00 },
++	{ CCI_REG8(0x4031), 0x00 },
++	{ CCI_REG8(0x4032), 0x00 },
++	{ CCI_REG8(0x4033), 0x00 },
++	{ CCI_REG8(0x4034), 0x00 },
++	{ CCI_REG8(0x4035), 0x00 },
++	{ CCI_REG8(0x4036), 0x00 },
++	{ CCI_REG8(0x4037), 0x00 },
++	{ CCI_REG8(0x4040), 0x00 },
++	{ CCI_REG8(0x4041), 0x07 },
++	{ CCI_REG8(0x4201), 0x00 },
++	{ CCI_REG8(0x4202), 0x01 },
++	{ CCI_REG8(0x4204), 0x09 },
++	{ CCI_REG8(0x4205), 0x00 },
++	{ CCI_REG8(0x4300), 0xff },
++	{ CCI_REG8(0x4301), 0x00 },
++	{ CCI_REG8(0x4302), 0x0f },
++	{ CCI_REG8(0x4500), 0x08 },
++	{ CCI_REG8(0x4501), 0x00 },
++	{ CCI_REG8(0x450b), 0x00 },
++	{ CCI_REG8(0x4640), 0x01 },
++	{ CCI_REG8(0x4641), 0x04 },
++	{ CCI_REG8(0x4645), 0x03 },
++	{ CCI_REG8(0x4800), 0x60 },
++	{ CCI_REG8(0x4803), 0x18 },
++	{ CCI_REG8(0x4809), 0x2b },
++	{ CCI_REG8(0x480e), 0x02 },
++	{ CCI_REG8(0x4813), 0x90 },
++	{ CCI_REG8(0x481b), 0x3c },
++	{ CCI_REG8(0x4847), 0x01 },
++	{ CCI_REG8(0x4850), 0x5d },
++	{ CCI_REG8(0x4854), 0x0d },
++	{ CCI_REG8(0x4856), 0x5a },
++	{ CCI_REG8(0x4888), 0x90 },
++	{ CCI_REG8(0x4901), 0x00 },
++	{ CCI_REG8(0x4902), 0x00 },
++	{ CCI_REG8(0x4904), 0x09 },
++	{ CCI_REG8(0x4905), 0x00 },
++	{ CCI_REG8(0x5000), 0x89 },
++	{ CCI_REG8(0x5001), 0x5a },
++	{ CCI_REG8(0x5002), 0x51 },
++	{ CCI_REG8(0x5005), 0xd0 },
++	{ CCI_REG8(0x5007), 0xa0 },
++	{ CCI_REG8(0x500a), 0x02 },
++	{ CCI_REG8(0x500b), 0x02 },
++	{ CCI_REG8(0x500c), 0x0a },
++	{ CCI_REG8(0x500d), 0x0a },
++	{ CCI_REG8(0x500e), 0x02 },
++	{ CCI_REG8(0x500f), 0x06 },
++	{ CCI_REG8(0x5010), 0x0a },
++	{ CCI_REG8(0x5011), 0x0e },
++	{ CCI_REG8(0x5013), 0x00 },
++	{ CCI_REG8(0x5015), 0x00 },
++	{ CCI_REG8(0x5017), 0x10 },
++	{ CCI_REG8(0x5019), 0x00 },
++	{ CCI_REG8(0x501b), 0xc0 },
++	{ CCI_REG8(0x501d), 0xa0 },
++	{ CCI_REG8(0x501e), 0x00 },
++	{ CCI_REG8(0x501f), 0x40 },
++	{ CCI_REG8(0x5058), 0x00 },
++	{ CCI_REG8(0x5081), 0x00 },
++	{ CCI_REG8(0x5180), 0x00 },
++	{ CCI_REG8(0x5181), 0x3c },
++	{ CCI_REG8(0x5182), 0x01 },
++	{ CCI_REG8(0x5183), 0xfc },
++	{ CCI_REG8(0x5200), 0x4f },
++	{ CCI_REG8(0x5203), 0x07 },
++	{ CCI_REG8(0x5208), 0xff },
++	{ CCI_REG8(0x520a), 0x3f },
++	{ CCI_REG8(0x520b), 0xc0 },
++	{ CCI_REG8(0x520c), 0x05 },
++	{ CCI_REG8(0x520d), 0xc8 },
++	{ CCI_REG8(0x520e), 0x3f },
++	{ CCI_REG8(0x520f), 0x0f },
++	{ CCI_REG8(0x5210), 0x0a },
++	{ CCI_REG8(0x5218), 0x02 },
++	{ CCI_REG8(0x5219), 0x01 },
++	{ CCI_REG8(0x521b), 0x02 },
++	{ CCI_REG8(0x521c), 0x01 },
++	{ CCI_REG8(0x58cb), 0x03 },
++	{ CCI_REG8(0x0102), 0x01 },
++};
++
++static const struct cci_reg_sequence ov08a10_mode_3264x2448_regs[] = {
++	{ CCI_REG8(0x0303), 0x04 },
++	{ CCI_REG8(0x0304), 0x01 },
++	{ CCI_REG8(0x0305), 0xf4 },
++	{ CCI_REG8(0x4837), 0x0a },
++	{ CCI_REG8(0x3106), 0x80 },
++	{ CCI_REG8(0x340c), 0x20 },
++	{ CCI_REG8(0x3501), 0x16 },
++	{ CCI_REG8(0x3502), 0x04 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x00 },
++	{ CCI_REG8(0x3803), 0x08 },
++	{ CCI_REG8(0x3804), 0x0c },
++	{ CCI_REG8(0x3805), 0xdf },
++	{ CCI_REG8(0x3806), 0x09 },
++	{ CCI_REG8(0x3807), 0xa7 },
++	{ CCI_REG8(0x3808), 0x0c },
++	{ CCI_REG8(0x3809), 0xc0 },
++	{ CCI_REG8(0x380a), 0x09 },
++	{ CCI_REG8(0x380b), 0x90 },
++	{ CCI_REG8(0x380e), 0x17 },
++	{ CCI_REG8(0x380f), 0x1a },
++	{ CCI_REG8(0x3811), 0x11 },
++	{ CCI_REG8(0x3813), 0x08 },
++	{ CCI_REG8(0x4800), 0x60 },
++	{ CCI_REG8(0x4850), 0x5d },
++	{ CCI_REG8(0x4854), 0x0d },
++	{ CCI_REG8(0x4856), 0x7a },
++};
++
++static const struct ov08a10_mode ov08a10_modes[] = {
++	{
++		.width = 3264,
++		.height = 2448,
++		.vts = 5914,
++		.crop = {
++			.left = 16,
++			.top = 16,
++			.width = 3264,
++			.height = 2448,
++		},
++		.regs = ov08a10_mode_3264x2448_regs,
++		.num_regs = ARRAY_SIZE(ov08a10_mode_3264x2448_regs),
++	},
++};
++
++static const s64 ov08a10_link_freqs[] = {
++	OV08A10_LINK_FREQ,
++};
++
++static const char * const ov08a10_test_pattern_menu[] = {
++	"Disabled",
++	"Colour Bars",
++};
++
++static int ov08a10_set_ctrl(struct v4l2_ctrl *ctrl)
++{
++	struct ov08a10 *sensor = container_of(ctrl->handler, struct ov08a10,
++					      ctrls);
++	struct v4l2_subdev_state *state =
++		v4l2_subdev_get_locked_active_state(&sensor->sd);
++	const struct v4l2_mbus_framefmt *fmt =
++		v4l2_subdev_state_get_format(state, 0);
++	int ret;
++
++	if (ctrl->id == V4L2_CID_VBLANK) {
++		s64 max = fmt->height + ctrl->val - OV08A10_EXPOSURE_MARGIN;
++
++		ret = __v4l2_ctrl_modify_range(sensor->exposure,
++					       sensor->exposure->minimum, max,
++					       sensor->exposure->step,
++					       min(sensor->exposure->default_value,
++						   max));
++		if (ret)
++			return ret;
++	}
++
++	if (!pm_runtime_get_if_in_use(sensor->dev))
++		return 0;
++
++	switch (ctrl->id) {
++	case V4L2_CID_ANALOGUE_GAIN:
++		ret = cci_write(sensor->regmap, OV08A10_REG_ANALOG_GAIN,
++				ctrl->val, NULL);
++		break;
++	case V4L2_CID_EXPOSURE:
++		ret = cci_write(sensor->regmap, OV08A10_REG_EXPOSURE,
++				ctrl->val, NULL);
++		break;
++	case V4L2_CID_VBLANK:
++		ret = cci_write(sensor->regmap, OV08A10_REG_VTS,
++				fmt->height + ctrl->val, NULL);
++		break;
++	case V4L2_CID_TEST_PATTERN:
++		ret = cci_write(sensor->regmap, OV08A10_REG_TEST_PATTERN,
++				ctrl->val, NULL);
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	pm_runtime_put(sensor->dev);
++
++	return ret;
++}
++
++static const struct v4l2_ctrl_ops ov08a10_ctrl_ops = {
++	.s_ctrl = ov08a10_set_ctrl,
++};
++
++static int ov08a10_enum_mbus_code(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *state,
++				  struct v4l2_subdev_mbus_code_enum *code)
++{
++	if (code->index)
++		return -EINVAL;
++
++	code->code = MEDIA_BUS_FMT_SBGGR10_1X10;
++
++	return 0;
++}
++
++static int ov08a10_enum_frame_size(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_state *state,
++				   struct v4l2_subdev_frame_size_enum *fse)
++{
++	if (fse->index >= ARRAY_SIZE(ov08a10_modes) ||
++	    fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
++		return -EINVAL;
++
++	fse->min_width = ov08a10_modes[fse->index].width;
++	fse->max_width = fse->min_width;
++	fse->min_height = ov08a10_modes[fse->index].height;
++	fse->max_height = fse->min_height;
++
++	return 0;
++}
++
++static int ov08a10_set_pad_format(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *state,
++				  struct v4l2_subdev_format *fmt)
++{
++	struct ov08a10 *sensor = to_ov08a10(sd);
++	const struct ov08a10_mode *mode;
++	int ret;
++
++	mode = v4l2_find_nearest_size(ov08a10_modes, ARRAY_SIZE(ov08a10_modes),
++				      width, height, fmt->format.width,
++				      fmt->format.height);
++
++	fmt->format.code = MEDIA_BUS_FMT_SBGGR10_1X10;
++	fmt->format.width = mode->width;
++	fmt->format.height = mode->height;
++	fmt->format.field = V4L2_FIELD_NONE;
++	fmt->format.colorspace = V4L2_COLORSPACE_RAW;
++
++	*v4l2_subdev_state_get_format(state, fmt->pad) = fmt->format;
++	*v4l2_subdev_state_get_crop(state, fmt->pad) = mode->crop;
++
++	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
++		return 0;
++
++	ret = __v4l2_ctrl_modify_range(sensor->vblank,
++				       mode->vts - mode->height,
++				       OV08A10_VTS_MAX - mode->height, 1,
++				       mode->vts - mode->height);
++	if (ret)
++		return ret;
++
++	return __v4l2_ctrl_s_ctrl(sensor->vblank, mode->vts - mode->height);
++}
++
++static int ov08a10_get_selection(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *state,
++				 struct v4l2_subdev_selection *sel)
++{
++	switch (sel->target) {
++	case V4L2_SEL_TGT_CROP:
++		sel->r = *v4l2_subdev_state_get_crop(state, sel->pad);
++		return 0;
++	case V4L2_SEL_TGT_NATIVE_SIZE:
++	case V4L2_SEL_TGT_CROP_BOUNDS:
++		sel->r.left = 0;
++		sel->r.top = 0;
++		sel->r.width = OV08A10_NATIVE_WIDTH;
++		sel->r.height = OV08A10_NATIVE_HEIGHT;
++		return 0;
++	case V4L2_SEL_TGT_CROP_DEFAULT:
++		sel->r = ov08a10_modes[0].crop;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++static int ov08a10_init_state(struct v4l2_subdev *sd,
++			      struct v4l2_subdev_state *state)
++{
++	struct v4l2_subdev_format fmt = {
++		.which = V4L2_SUBDEV_FORMAT_TRY,
++		.format = {
++			.width = ov08a10_modes[0].width,
++			.height = ov08a10_modes[0].height,
++		},
++	};
++
++	return ov08a10_set_pad_format(sd, state, &fmt);
++}
++
++static int ov08a10_enable_streams(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *state, u32 pad,
++				  u64 streams_mask)
++{
++	struct ov08a10 *sensor = to_ov08a10(sd);
++	const struct v4l2_mbus_framefmt *fmt;
++	const struct ov08a10_mode *mode;
++	int ret;
++
++	ret = pm_runtime_resume_and_get(sensor->dev);
++	if (ret)
++		return ret;
++
++	fmt = v4l2_subdev_state_get_format(state, 0);
++	mode = v4l2_find_nearest_size(ov08a10_modes, ARRAY_SIZE(ov08a10_modes),
++				      width, height, fmt->width, fmt->height);
++
++	ret = cci_write(sensor->regmap, OV08A10_REG_SOFTWARE_RESET, 0x01, NULL);
++	if (ret)
++		goto err_put;
++	usleep_range(5000, 6000);
++
++	ret = cci_multi_reg_write(sensor->regmap, ov08a10_init_regs,
++				  ARRAY_SIZE(ov08a10_init_regs), NULL);
++	if (ret)
++		goto err_put;
++
++	ret = cci_multi_reg_write(sensor->regmap, mode->regs, mode->num_regs,
++				  NULL);
++	if (ret)
++		goto err_put;
++
++	ret = __v4l2_ctrl_handler_setup(&sensor->ctrls);
++	if (ret)
++		goto err_put;
++
++	ret = cci_write(sensor->regmap, OV08A10_REG_MODE_SELECT,
++			OV08A10_MODE_STREAMING, NULL);
++	if (ret)
++		goto err_put;
++
++	return 0;
++
++err_put:
++	dev_err(sensor->dev, "failed to start streaming: %d\n", ret);
++	pm_runtime_put(sensor->dev);
++
++	return ret;
++}
++
++static int ov08a10_disable_streams(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_state *state, u32 pad,
++				   u64 streams_mask)
++{
++	struct ov08a10 *sensor = to_ov08a10(sd);
++	int ret;
++
++	ret = cci_write(sensor->regmap, OV08A10_REG_MODE_SELECT,
++			OV08A10_MODE_STANDBY, NULL);
++	if (ret)
++		dev_err(sensor->dev, "failed to stop streaming: %d\n", ret);
++
++	pm_runtime_put(sensor->dev);
++
++	return 0;
++}
++
++static const struct v4l2_subdev_video_ops ov08a10_video_ops = {
++	.s_stream = v4l2_subdev_s_stream_helper,
++};
++
++static const struct v4l2_subdev_pad_ops ov08a10_pad_ops = {
++	.enum_mbus_code = ov08a10_enum_mbus_code,
++	.enum_frame_size = ov08a10_enum_frame_size,
++	.get_fmt = v4l2_subdev_get_fmt,
++	.set_fmt = ov08a10_set_pad_format,
++	.get_selection = ov08a10_get_selection,
++	.enable_streams = ov08a10_enable_streams,
++	.disable_streams = ov08a10_disable_streams,
++};
++
++static const struct v4l2_subdev_ops ov08a10_subdev_ops = {
++	.video = &ov08a10_video_ops,
++	.pad = &ov08a10_pad_ops,
++};
++
++static const struct v4l2_subdev_internal_ops ov08a10_internal_ops = {
++	.init_state = ov08a10_init_state,
++};
++
++static int ov08a10_power_on(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct ov08a10 *sensor = to_ov08a10(sd);
++	int ret;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(sensor->supplies),
++				    sensor->supplies);
++	if (ret)
++		return ret;
++
++	usleep_range(1000, 2000);
++
++	ret = clk_prepare_enable(sensor->clk);
++	if (ret) {
++		regulator_bulk_disable(ARRAY_SIZE(sensor->supplies),
++				       sensor->supplies);
++		return ret;
++	}
++
++	usleep_range(1000, 2000);
++	gpiod_set_value_cansleep(sensor->reset_gpio, 0);
++	/* 8192 MCLK cycles before the first SCCB access */
++	usleep_range(5000, 6000);
++
++	return 0;
++}
++
++static int ov08a10_power_off(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct ov08a10 *sensor = to_ov08a10(sd);
++
++	gpiod_set_value_cansleep(sensor->reset_gpio, 1);
++	usleep_range(1000, 2000);
++	clk_disable_unprepare(sensor->clk);
++	regulator_bulk_disable(ARRAY_SIZE(sensor->supplies), sensor->supplies);
++
++	return 0;
++}
++
++static int ov08a10_init_controls(struct ov08a10 *sensor)
++{
++	const struct ov08a10_mode *mode = &ov08a10_modes[0];
++	struct v4l2_fwnode_device_properties props;
++	struct v4l2_ctrl_handler *hdl = &sensor->ctrls;
++	struct v4l2_ctrl *ctrl;
++	int ret;
++
++	ret = v4l2_fwnode_device_parse(sensor->dev, &props);
++	if (ret)
++		return ret;
++
++	v4l2_ctrl_handler_init(hdl, 10);
++
++	ctrl = v4l2_ctrl_new_int_menu(hdl, &ov08a10_ctrl_ops,
++				      V4L2_CID_LINK_FREQ, 0, 0,
++				      ov08a10_link_freqs);
++	if (ctrl)
++		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
++
++	v4l2_ctrl_new_std(hdl, &ov08a10_ctrl_ops, V4L2_CID_PIXEL_RATE,
++			  OV08A10_PIXEL_RATE, OV08A10_PIXEL_RATE, 1,
++			  OV08A10_PIXEL_RATE);
++
++	sensor->vblank = v4l2_ctrl_new_std(hdl, &ov08a10_ctrl_ops,
++					   V4L2_CID_VBLANK,
++					   mode->vts - mode->height,
++					   OV08A10_VTS_MAX - mode->height, 1,
++					   mode->vts - mode->height);
++
++	ctrl = v4l2_ctrl_new_std(hdl, &ov08a10_ctrl_ops, V4L2_CID_HBLANK,
++				 OV08A10_LLP - mode->width,
++				 OV08A10_LLP - mode->width, 1,
++				 OV08A10_LLP - mode->width);
++	if (ctrl)
++		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
++
++	sensor->exposure = v4l2_ctrl_new_std(hdl, &ov08a10_ctrl_ops,
++					     V4L2_CID_EXPOSURE,
++					     OV08A10_EXPOSURE_MIN,
++					     mode->vts - OV08A10_EXPOSURE_MARGIN,
++					     1, 1000);
++
++	v4l2_ctrl_new_std(hdl, &ov08a10_ctrl_ops, V4L2_CID_ANALOGUE_GAIN,
++			  OV08A10_ANA_GAIN_MIN, OV08A10_ANA_GAIN_MAX, 1,
++			  OV08A10_ANA_GAIN_DEFAULT);
++
++	v4l2_ctrl_new_std_menu_items(hdl, &ov08a10_ctrl_ops,
++				     V4L2_CID_TEST_PATTERN,
++				     ARRAY_SIZE(ov08a10_test_pattern_menu) - 1,
++				     0, 0, ov08a10_test_pattern_menu);
++
++	v4l2_ctrl_new_fwnode_properties(hdl, &ov08a10_ctrl_ops, &props);
++
++	if (hdl->error) {
++		ret = hdl->error;
++		v4l2_ctrl_handler_free(hdl);
++		return ret;
++	}
++
++	sensor->sd.ctrl_handler = hdl;
++
++	return 0;
++}
++
++static int ov08a10_parse_endpoint(struct ov08a10 *sensor)
++{
++	struct v4l2_fwnode_endpoint ep = {
++		.bus_type = V4L2_MBUS_CSI2_DPHY,
++	};
++	struct fwnode_handle *fwnode;
++	unsigned long bitmap;
++	int ret;
++
++	fwnode = fwnode_graph_get_next_endpoint(dev_fwnode(sensor->dev), NULL);
++	if (!fwnode)
++		return -ENXIO;
++
++	ret = v4l2_fwnode_endpoint_alloc_parse(fwnode, &ep);
++	fwnode_handle_put(fwnode);
++	if (ret)
++		return ret;
++
++	if (ep.bus.mipi_csi2.num_data_lanes != 2) {
++		ret = dev_err_probe(sensor->dev, -EINVAL,
++				    "need 2 data lanes, got %u\n",
++				    ep.bus.mipi_csi2.num_data_lanes);
++		goto out;
++	}
++
++	ret = v4l2_link_freq_to_bitmap(sensor->dev, ep.link_frequencies,
++				       ep.nr_of_link_frequencies,
++				       ov08a10_link_freqs,
++				       ARRAY_SIZE(ov08a10_link_freqs), &bitmap);
++out:
++	v4l2_fwnode_endpoint_free(&ep);
++
++	return ret;
++}
++
++static int ov08a10_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct ov08a10 *sensor;
++	u64 id;
++	int ret;
++
++	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
++	if (!sensor)
++		return -ENOMEM;
++
++	sensor->dev = dev;
++
++	ret = ov08a10_parse_endpoint(sensor);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to parse endpoint\n");
++
++	sensor->clk = devm_v4l2_sensor_clk_get(dev, NULL);
++	if (IS_ERR(sensor->clk))
++		return dev_err_probe(dev, PTR_ERR(sensor->clk),
++				     "failed to get clock\n");
++	if (clk_get_rate(sensor->clk) != OV08A10_EXT_CLK)
++		return dev_err_probe(dev, -EINVAL, "unsupported clock rate %lu\n",
++				     clk_get_rate(sensor->clk));
++
++	for (unsigned int i = 0; i < ARRAY_SIZE(ov08a10_supply_names); i++)
++		sensor->supplies[i].supply = ov08a10_supply_names[i];
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(sensor->supplies),
++				      sensor->supplies);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get supplies\n");
++
++	sensor->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(sensor->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(sensor->reset_gpio),
++				     "failed to get reset gpio\n");
++
++	sensor->regmap = devm_cci_regmap_init_i2c(client, 16);
++	if (IS_ERR(sensor->regmap))
++		return PTR_ERR(sensor->regmap);
++
++	v4l2_i2c_subdev_init(&sensor->sd, client, &ov08a10_subdev_ops);
++
++	ret = ov08a10_power_on(dev);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to power on\n");
++
++	ret = cci_read(sensor->regmap, OV08A10_REG_CHIP_ID, &id, NULL);
++	if (ret) {
++		dev_err_probe(dev, ret, "failed to read chip id\n");
++		goto err_power_off;
++	}
++	if (id != OV08A10_CHIP_ID) {
++		ret = dev_err_probe(dev, -ENODEV, "unexpected chip id 0x%04llx\n",
++				    id);
++		goto err_power_off;
++	}
++
++	ret = ov08a10_init_controls(sensor);
++	if (ret)
++		goto err_power_off;
++
++	sensor->sd.internal_ops = &ov08a10_internal_ops;
++	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
++	sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
++	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
++
++	ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
++	if (ret)
++		goto err_ctrls;
++
++	sensor->sd.state_lock = sensor->ctrls.lock;
++	ret = v4l2_subdev_init_finalize(&sensor->sd);
++	if (ret)
++		goto err_entity;
++
++	pm_runtime_set_active(dev);
++	pm_runtime_enable(dev);
++
++	ret = v4l2_async_register_subdev_sensor(&sensor->sd);
++	if (ret)
++		goto err_pm;
++
++	pm_runtime_idle(dev);
++
++	return 0;
++
++err_pm:
++	pm_runtime_disable(dev);
++	pm_runtime_set_suspended(dev);
++	v4l2_subdev_cleanup(&sensor->sd);
++err_entity:
++	media_entity_cleanup(&sensor->sd.entity);
++err_ctrls:
++	v4l2_ctrl_handler_free(&sensor->ctrls);
++err_power_off:
++	ov08a10_power_off(dev);
++
++	return ret;
++}
++
++static void ov08a10_remove(struct i2c_client *client)
++{
++	struct v4l2_subdev *sd = i2c_get_clientdata(client);
++
++	v4l2_async_unregister_subdev(sd);
++	v4l2_subdev_cleanup(sd);
++	media_entity_cleanup(&sd->entity);
++	v4l2_ctrl_handler_free(sd->ctrl_handler);
++
++	pm_runtime_disable(&client->dev);
++	if (!pm_runtime_status_suspended(&client->dev)) {
++		ov08a10_power_off(&client->dev);
++		pm_runtime_set_suspended(&client->dev);
++	}
++}
++
++static DEFINE_RUNTIME_DEV_PM_OPS(ov08a10_pm_ops, ov08a10_power_off,
++				 ov08a10_power_on, NULL);
++
++static const struct of_device_id ov08a10_of_match[] = {
++	{ .compatible = "ovti,ov08a10" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ov08a10_of_match);
++
++static struct i2c_driver ov08a10_driver = {
++	.driver = {
++		.name = "ov08a10",
++		.of_match_table = ov08a10_of_match,
++		.pm = pm_ptr(&ov08a10_pm_ops),
++	},
++	.probe = ov08a10_probe,
++	.remove = ov08a10_remove,
++};
++module_i2c_driver(ov08a10_driver);
++
++MODULE_DESCRIPTION("OmniVision OV08A10 image sensor driver");
++MODULE_LICENSE("GPL");

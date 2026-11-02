@@ -1,0 +1,61 @@
+From e220d8c1534f0b6bd07abe30d293c931d5eaaebf Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:03:00 +0000
+Subject: [PATCH 024/110] FIXUP: Input: synaptics_tcm_i2c - read final padding
+ chunk, clamp active count
+
+Address review: when a payload ends exactly at the first chunk boundary
+the trailing 0x5a padding byte was never read, desynchronising the
+stream; always finish with a "last" continued read. Clamp the reported
+number of active objects to SYNA_MAX_OBJECTS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/synaptics_tcm_i2c.c | 19 +++++++++++++------
+ 1 file changed, 13 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/input/touchscreen/synaptics_tcm_i2c.c b/drivers/input/touchscreen/synaptics_tcm_i2c.c
+index 2553dabd392..bce8646023d 100644
+--- a/drivers/input/touchscreen/synaptics_tcm_i2c.c
++++ b/drivers/input/touchscreen/synaptics_tcm_i2c.c
+@@ -262,8 +262,12 @@ static int syna_recv_message(struct syna_tcm *ts)
+ 	 * payload. The trailing padding byte (0x5a) is read and verified in the
+ 	 * final chunk.
+ 	 */
++	/*
++	 * Always finish with a "last" chunk: when the payload ends exactly at
++	 * the first chunk boundary the padding byte still has to be read.
++	 */
+ 	remaining = ts->payload_len - copied;
+-	while (remaining) {
++	for (;;) {
+ 		bool last = (remaining <= SYNA_RD_CHUNK_SIZE - 3);
+ 		unsigned int chunk = last ? remaining :
+ 					    min(remaining - 1,
+@@ -288,10 +292,13 @@ static int syna_recv_message(struct syna_tcm *ts)
+ 		copied += chunk;
+ 		remaining -= chunk;
+ 
+-		if (last && ts->rxbuf[2 + chunk] != SYNA_MESSAGE_PADDING) {
+-			dev_dbg(dev, "bad continued-read padding 0x%02x\n",
+-				ts->rxbuf[2 + chunk]);
+-			return -EPROTO;
++		if (last) {
++			if (ts->rxbuf[2 + chunk] != SYNA_MESSAGE_PADDING) {
++				dev_dbg(dev, "bad continued-read padding 0x%02x\n",
++					ts->rxbuf[2 + chunk]);
++				return -EPROTO;
++			}
++			break;
+ 		}
+ 	}
+ 
+@@ -492,7 +499,7 @@ static int syna_parse_touch_report(struct syna_tcm *ts)
+ 			obj = data;
+ 			break;
+ 		case SYNA_TOUCH_NUM_OF_ACTIVE_OBJECTS:
+-			active = data;
++			active = min_t(u32, data, SYNA_MAX_OBJECTS);
+ 			have_active_count = true;
+ 			if (!active)
+ 				done = true;

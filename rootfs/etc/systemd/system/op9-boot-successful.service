@@ -1,0 +1,10 @@
+[Unit]
+Description=Mark the current A/B boot slot successful (OnePlus 9 Pro)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/op9-boot-successful
+
+[Install]
+WantedBy=multi-user.target

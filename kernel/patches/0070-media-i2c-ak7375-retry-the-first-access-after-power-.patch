@@ -1,0 +1,42 @@
+From 95c5763e18c32ccd8ab9ea0a84d028606d6660ff Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:11:32 +0000
+Subject: [PATCH 070/110] media: i2c: ak7375: retry the first access after
+ power up, power off on failure
+
+The AK7377 focus motors of the OnePlus 9 Pro do not answer for a good
+while longer than tDELAY after their supply comes up, so the resume
+failed and left the camera without a lens. Retry the first write for up
+to 100 ms, and turn the supplies back off when it still fails rather
+than leaving them enabled.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/ak7375.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/i2c/ak7375.c b/drivers/media/i2c/ak7375.c
+index 9a2432cea3f..91141f3293f 100644
+--- a/drivers/media/i2c/ak7375.c
++++ b/drivers/media/i2c/ak7375.c
+@@ -305,10 +305,18 @@ static int __maybe_unused ak7375_vcm_resume(struct device *dev)
+ 	/* Wait for vcm to become ready */
+ 	usleep_range(cdef->power_delay_us, cdef->power_delay_us + 500);
+ 
+-	ret = ak7375_i2c_write(ak7375_dev, cdef->reg_cont,
+-			       cdef->mode_active, 1);
++	/* Some parts take a good deal longer than tDELAY after a cold start */
++	for (int i = 0; i < 10; i++) {
++		ret = ak7375_i2c_write(ak7375_dev, cdef->reg_cont,
++				       cdef->mode_active, 1);
++		if (!ret)
++			break;
++		usleep_range(10000, 11000);
++	}
+ 	if (ret) {
+ 		dev_err(dev, "%s I2C failure: %d\n", __func__, ret);
++		regulator_bulk_disable(ARRAY_SIZE(ak7375_supply_names),
++				       ak7375_dev->supplies);
+ 		return ret;
+ 	}
+ 

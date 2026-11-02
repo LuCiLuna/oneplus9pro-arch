@@ -1,0 +1,40 @@
+From 04af79ddad6d1058e010900c9bea077589640e27 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:03:00 +0000
+Subject: [PATCH 025/110] arm64: dts: qcom: sm8350-oneplus-lemonadep: add
+ Synaptics S3908 touchscreen
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index ffa0291f941..1c333b9037e 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -38,6 +38,24 @@ &display_panel {
+ 	status = "okay";
+ };
+ 
++&i2c4 {
++	touchscreen@4b {
++		compatible = "syna,s3908";
++		reg = <0x4b>;
++		interrupts-extended = <&tlmm 23 IRQ_TYPE_LEVEL_LOW>;
++		reset-gpios = <&tlmm 22 GPIO_ACTIVE_LOW>;
++
++		/* downstream vdd_2v8 (l3c at 3.008 V) and the 1.8 V vddi */
++		vdd-supply = <&pm8350c_l3>;
++		avdd-supply = <&pm8350c_l8>;
++
++		/* GPIO 31 and 197 switch the 2.8 V and 1.8 V rails to the panel IC */
++		pinctrl-0 = <&tp_rst_active>, <&tp_irq_active>, <&tp_enable_2v8>;
++		pinctrl-1 = <&tp_rst_suspend>, <&tp_irq_suspend>;
++		pinctrl-names = "default", "sleep";
++	};
++};
++
+ &mdss {
+ 	status = "okay";
+ };

@@ -1,0 +1,182 @@
+From 6b89404c08a1901c6deeea14c604f1bd2b88ce46 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 18:53:04 +0000
+Subject: [PATCH 056/110] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep: main
+ camera
+
+Add the IMX789 main camera on CCI0 bus 0 / CSIPHY1 (C-PHY) with its
+GPIO-switched rails, and disable the second PM8008, which does not
+answer on this board and feeds no camera.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 124 ++++++++++++++++++
+ 1 file changed, 124 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 0439531d152..cf7e402827a 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -7,6 +7,7 @@
+ 
+ /dts-v1/;
+ 
++#include <dt-bindings/media/video-interfaces.h>
+ #include "sm8350-oneplus-common.dtsi"
+ 
+ / {
+@@ -45,6 +46,43 @@ vreg_cam_front_vana: regulator-cam-front-vana {
+ 		pinctrl-names = "default";
+ 	};
+ 
++	/* Main camera rails: GPIO-switched load switches/LDOs */
++	vreg_cam_main_avdd: regulator-cam-main-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_main_avdd";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		gpio = <&tlmm 196 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&pm8350c_s1>;
++		pinctrl-0 = <&cam_main_avdd_en>;
++		pinctrl-names = "default";
++	};
++
++	vreg_cam_main_avdd1: regulator-cam-main-avdd1 {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_main_avdd1";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		gpio = <&tlmm 105 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&vreg_bob>;
++		pinctrl-0 = <&cam_main_avdd1_en>;
++		pinctrl-names = "default";
++	};
++
++	vreg_cam_main_dvdd: regulator-cam-main-dvdd {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_main_dvdd";
++		regulator-min-microvolt = <1100000>;
++		regulator-max-microvolt = <1100000>;
++		gpio = <&tlmm 34 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&vreg_bob>;
++		pinctrl-0 = <&cam_main_dvdd_en>;
++		pinctrl-names = "default";
++	};
++
+ 	wcd938x: audio-codec {
+ 		compatible = "qcom,wcd9380-codec";
+ 
+@@ -218,6 +256,15 @@ &camss {
+ 	status = "okay";
+ 
+ 	ports {
++		/* Main camera on CSIPHY1, C-PHY */
++		port@1 {
++			csiphy1_ep: endpoint {
++				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
++				data-lanes = <0 1 2>;
++				remote-endpoint = <&imx789_ep>;
++			};
++		};
++
+ 		/* Front camera on CSIPHY5 */
+ 		port@5 {
+ 			csiphy5_ep: endpoint {
+@@ -229,6 +276,43 @@ csiphy5_ep: endpoint {
+ 	};
+ };
+ 
++&cci0 {
++	status = "okay";
++};
++
++&cci0_i2c0 {
++	/* Main camera, Semco IMX789 */
++	camera@1a {
++		compatible = "sony,imx789";
++		reg = <0x1a>;
++
++		clocks = <&camcc CAM_CC_MCLK0_CLK>;
++		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
++		assigned-clock-rates = <19200000>;
++
++		reset-gpios = <&tlmm 16 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&cam_mclk0_active>, <&cam_main_reset>;
++		pinctrl-names = "default";
++
++		vio-supply = <&vreg_l5i>;
++		vana-supply = <&vreg_cam_main_avdd>;
++		vana1-supply = <&vreg_cam_main_avdd1>;
++		vdig-supply = <&vreg_cam_main_dvdd>;
++
++		rotation = <90>;
++		orientation = <1>;
++
++		port {
++			imx789_ep: endpoint {
++				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
++				data-lanes = <0 1 2>;
++				link-frequencies = /bits/ 64 <480000000>;
++				remote-endpoint = <&csiphy1_ep>;
++			};
++		};
++	};
++};
++
+ &cci1 {
+ 	status = "okay";
+ };
+@@ -445,6 +529,41 @@ data1-pins {
+ 		};
+ 	};
+ 
++	cam_mclk0_active: cam-mclk0-active-state {
++		pins = "gpio100";
++		function = "cam_mclk";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_main_reset: cam-main-reset-state {
++		pins = "gpio16";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_main_avdd_en: cam-main-avdd-en-state {
++		pins = "gpio196";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_main_avdd1_en: cam-main-avdd1-en-state {
++		pins = "gpio105";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_main_dvdd_en: cam-main-dvdd-en-state {
++		pins = "gpio34";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	cam_mclk3_active: cam-mclk3-active-state {
+ 		pins = "gpio103";
+ 		function = "cam_mclk";
+@@ -500,3 +619,8 @@ &usb_1_dwc3 {
+ 	role-switch-default-mode = "peripheral";
+ };
+ 
++
++/* Not populated on lemonadep (no ACK at 0x0c/0x0d); no camera uses it */
++&pm8008j {
++	status = "disabled";
++};

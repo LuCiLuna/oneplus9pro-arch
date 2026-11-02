@@ -1,0 +1,52 @@
+From 29c01a02ca30c1a18f35cf1029e774538d981a7f Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:37:50 +0000
+Subject: [PATCH 031/110] ASoC: codecs: lpass-va-macro: expose DMIC clocks as
+ DAPM supplies
+
+The DMIC clock generators live in the VA macro, but on SM8350 phones the
+DMICs are read by the TX macro (MSM_DMIC inputs), which never enables
+them, so TX DMIC capture returns zeros. Add per-pair supply widgets so
+boards can route "TX DMICn" to the right clock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sound/soc/codecs/lpass-va-macro.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/sound/soc/codecs/lpass-va-macro.c b/sound/soc/codecs/lpass-va-macro.c
+index dbc5795b927..e794a4dd4ef 100644
+--- a/sound/soc/codecs/lpass-va-macro.c
++++ b/sound/soc/codecs/lpass-va-macro.c
+@@ -1217,9 +1217,31 @@ static const struct snd_soc_dapm_widget va_macro_dapm_widgets[] = {
+ 	SND_SOC_DAPM_SUPPLY_S("VA_MCLK", -1, SND_SOC_NOPM, 0, 0,
+ 			      va_macro_mclk_event,
+ 			      SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++
++	/*
++	 * DMIC clocks are generated here but also feed the TX macro DMIC
++	 * inputs; boards route "TX DMICn" to these supplies.
++	 */
++	SND_SOC_DAPM_SUPPLY("VA DMIC01 CLK", SND_SOC_NOPM, 0, 0,
++			    va_macro_enable_dmic,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SUPPLY("VA DMIC23 CLK", SND_SOC_NOPM, 2, 0,
++			    va_macro_enable_dmic,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SUPPLY("VA DMIC45 CLK", SND_SOC_NOPM, 4, 0,
++			    va_macro_enable_dmic,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SUPPLY("VA DMIC67 CLK", SND_SOC_NOPM, 6, 0,
++			    va_macro_enable_dmic,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+ };
+ 
+ static const struct snd_soc_dapm_route va_audio_map[] = {
++	{"VA DMIC01 CLK", NULL, "VA_MCLK"},
++	{"VA DMIC23 CLK", NULL, "VA_MCLK"},
++	{"VA DMIC45 CLK", NULL, "VA_MCLK"},
++	{"VA DMIC67 CLK", NULL, "VA_MCLK"},
++
+ 	{"VA_AIF1 CAP", NULL, "VA_MCLK"},
+ 	{"VA_AIF2 CAP", NULL, "VA_MCLK"},
+ 	{"VA_AIF3 CAP", NULL, "VA_MCLK"},

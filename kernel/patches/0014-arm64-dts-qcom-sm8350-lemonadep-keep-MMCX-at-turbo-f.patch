@@ -1,0 +1,35 @@
+From 63de6592bb19e4c7fb3d64220f5adc8c9ae9fa50 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 09:51:00 +0000
+Subject: [PATCH 014/110] arm64: dts: qcom: sm8350-lemonadep: keep MMCX at
+ turbo for the splash framebuffer
+
+Once rpmhpd reaches sync_state (videocc/gpucc etc. loaded from the
+rootfs), an unleveled MMCX vote lets the rail drop and the ABL-configured
+display pipeline stalls, freezing the console. Request turbo via
+required-opps on the simple-framebuffer node.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 2fc3cb3929c..e298368c33b 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -44,8 +44,13 @@ &display_panel {
+  * common 1080x2412 framebuffer and only vote the display rail.
+  */
+ &framebuffer {
+-	/* BRING-UP: keep the display rail voted while running on the ABL splash */
++	/*
++	 * BRING-UP: keep the display rail at the level the ABL splash needs;
++	 * once rpmhpd reaches sync_state, an unleveled vote lets MMCX drop and
++	 * the display pipeline stalls.
++	 */
+ 	power-domains = <&rpmhpd RPMHPD_MMCX>;
++	required-opps = <&rpmhpd_opp_turbo>;
+ };
+ 
+ &mpss {

@@ -1,0 +1,397 @@
+From df1d090f47fdec98ba3c393046d4bd96dfcd5450 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 23:20:18 +0000
+Subject: [PATCH 061/110] media: i2c: imx789: add the 2176x1224 4x4 binned mode
+
+The stock 240 fps video mode bins 4x4 over the full 8704 pixel width.
+Run it at 30 fps by default (longer frame); it needs the stock PLLs, so
+link frequency and pixel rate become per mode, and VBLANK is reset to
+the mode's default on a mode change. The 4000x3008 crop now records its
+352 pixel left offset within the 8704 wide array.
+
+With it libcamera picks a full width sensor mode for 1080p instead of
+centre cropping 1920x1080 out of 4000x3008.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/imx789.c | 266 ++++++++++++++++++++++++++++++++++---
+ 1 file changed, 245 insertions(+), 21 deletions(-)
+
+diff --git a/drivers/media/i2c/imx789.c b/drivers/media/i2c/imx789.c
+index 1c68b934488..40971ef34d4 100644
+--- a/drivers/media/i2c/imx789.c
++++ b/drivers/media/i2c/imx789.c
+@@ -61,6 +61,8 @@ struct imx789_mode {
+ 	u32 fll;
+ 	u32 llp;
+ 	struct v4l2_rect crop;
++	unsigned int link_freq_index;
++	u64 pixel_rate;
+ 	const struct cci_reg_sequence *regs;
+ 	unsigned int num_regs;
+ };
+@@ -73,8 +75,8 @@ struct imx789_chip {
+ 	const struct imx789_mode *modes;
+ 	unsigned int num_modes;
+ 	/* C-PHY: reported as half the symbol rate */
+-	s64 link_freq;
+-	u64 pixel_rate;
++	const s64 *link_freqs;
++	unsigned int num_link_freqs;
+ 	u32 native_width;
+ 	u32 native_height;
+ };
+@@ -91,6 +93,8 @@ struct imx789 {
+ 	struct regulator_bulk_data supplies[ARRAY_SIZE(imx789_supply_names)];
+ 
+ 	struct v4l2_ctrl_handler ctrls;
++	struct v4l2_ctrl *link_freq;
++	struct v4l2_ctrl *pixel_rate;
+ 	struct v4l2_ctrl *vblank;
+ 	struct v4l2_ctrl *hblank;
+ 	struct v4l2_ctrl *exposure;
+@@ -751,6 +755,185 @@ static const struct cci_reg_sequence imx789_mode_4000x3008_regs[] = {
+ 	{ CCI_REG8(0x380c), 0x00 },
+ };
+ 
++/*
++ * The stock 240 fps 4x4 binned mode (full width, 16:9), run off the
++ * 4000x3008 mode's PLLs so the C-PHY rate stays the same; 30 fps.
++ */
++static const struct cci_reg_sequence imx789_mode_2176x1224_regs[] = {
++	{ CCI_REG8(0x0112), 0x0a },
++	{ CCI_REG8(0x0113), 0x0a },
++	{ CCI_REG8(0x0114), 0x02 },
++	{ CCI_REG8(0x0342), 0x28 },
++	{ CCI_REG8(0x0343), 0x30 },
++	{ CCI_REG8(0x0340), 0x2c },
++	{ CCI_REG8(0x0341), 0x74 },
++	{ CCI_REG8(0x0344), 0x00 },
++	{ CCI_REG8(0x0345), 0x00 },
++	{ CCI_REG8(0x0346), 0x02 },
++	{ CCI_REG8(0x0347), 0x20 },
++	{ CCI_REG8(0x0348), 0x21 },
++	{ CCI_REG8(0x0349), 0xff },
++	{ CCI_REG8(0x034a), 0x15 },
++	{ CCI_REG8(0x034b), 0x3f },
++	{ CCI_REG8(0x0220), 0x62 },
++	{ CCI_REG8(0x0221), 0x11 },
++	{ CCI_REG8(0x0222), 0x01 },
++	{ CCI_REG8(0x0900), 0x01 },
++	{ CCI_REG8(0x0901), 0x44 },
++	{ CCI_REG8(0x0902), 0x0a },
++	{ CCI_REG8(0x3005), 0x02 },
++	{ CCI_REG8(0x3108), 0x0a },
++	{ CCI_REG8(0x3120), 0x04 },
++	{ CCI_REG8(0x3121), 0x00 },
++	{ CCI_REG8(0x3200), 0x43 },
++	{ CCI_REG8(0x3201), 0x43 },
++	{ CCI_REG8(0x32d5), 0x00 },
++	{ CCI_REG8(0x350c), 0x00 },
++	{ CCI_REG8(0x350d), 0x00 },
++	{ CCI_REG8(0x3845), 0x00 },
++	{ CCI_REG8(0x0408), 0x00 },
++	{ CCI_REG8(0x0409), 0x00 },
++	{ CCI_REG8(0x040a), 0x00 },
++	{ CCI_REG8(0x040b), 0x00 },
++	{ CCI_REG8(0x040c), 0x08 },
++	{ CCI_REG8(0x040d), 0x80 },
++	{ CCI_REG8(0x040e), 0x04 },
++	{ CCI_REG8(0x040f), 0xc8 },
++	{ CCI_REG8(0x034c), 0x08 },
++	{ CCI_REG8(0x034d), 0x80 },
++	{ CCI_REG8(0x034e), 0x04 },
++	{ CCI_REG8(0x034f), 0xc8 },
++	{ CCI_REG8(0x0301), 0x05 },
++	{ CCI_REG8(0x0303), 0x02 },
++	{ CCI_REG8(0x0305), 0x03 },
++	{ CCI_REG8(0x0306), 0x01 },
++	{ CCI_REG8(0x0307), 0x57 },
++	{ CCI_REG8(0x030b), 0x02 },
++	{ CCI_REG8(0x030d), 0x02 },
++	{ CCI_REG8(0x030e), 0x01 },
++	{ CCI_REG8(0x030f), 0xc7 },
++	{ CCI_REG8(0x30e8), 0x01 },
++	{ CCI_REG8(0x3110), 0x01 },
++	{ CCI_REG8(0x3111), 0xc4 },
++	{ CCI_REG8(0x3114), 0x01 },
++	{ CCI_REG8(0x3115), 0xc4 },
++	{ CCI_REG8(0x3118), 0x00 },
++	{ CCI_REG8(0x3119), 0x00 },
++	{ CCI_REG8(0x319c), 0x01 },
++	{ CCI_REG8(0x3800), 0x01 },
++	{ CCI_REG8(0x3801), 0x08 },
++	{ CCI_REG8(0x3802), 0x80 },
++	{ CCI_REG8(0x3803), 0x01 },
++	{ CCI_REG8(0x3804), 0x32 },
++	{ CCI_REG8(0x3805), 0x00 },
++	{ CCI_REG8(0x3806), 0x00 },
++	{ CCI_REG8(0x3807), 0x01 },
++	{ CCI_REG8(0x3808), 0x02 },
++	{ CCI_REG8(0x3809), 0x01 },
++	{ CCI_REG8(0x380a), 0x01 },
++	{ CCI_REG8(0x380b), 0x01 },
++	{ CCI_REG8(0x38a0), 0x00 },
++	{ CCI_REG8(0x38a1), 0x00 },
++	{ CCI_REG8(0x38a4), 0x00 },
++	{ CCI_REG8(0x38a5), 0x00 },
++	{ CCI_REG8(0x38a6), 0x00 },
++	{ CCI_REG8(0x38a7), 0x00 },
++	{ CCI_REG8(0x38aa), 0x00 },
++	{ CCI_REG8(0x38ab), 0x00 },
++	{ CCI_REG8(0x38b8), 0x00 },
++	{ CCI_REG8(0x38b9), 0x00 },
++	{ CCI_REG8(0x38bc), 0x00 },
++	{ CCI_REG8(0x38bd), 0x00 },
++	{ CCI_REG8(0x38be), 0x00 },
++	{ CCI_REG8(0x38bf), 0x00 },
++	{ CCI_REG8(0x7cc6), 0x01 },
++	{ CCI_REG8(0x7cc7), 0x02 },
++	{ CCI_REG8(0x8655), 0x01 },
++	{ CCI_REG8(0xb147), 0x00 },
++	{ CCI_REG8(0x0202), 0x05 },
++	{ CCI_REG8(0x0203), 0x5c },
++	{ CCI_REG8(0x0224), 0x01 },
++	{ CCI_REG8(0x0225), 0xf4 },
++	{ CCI_REG8(0x313a), 0x01 },
++	{ CCI_REG8(0x313b), 0xf4 },
++	{ CCI_REG8(0x0204), 0x00 },
++	{ CCI_REG8(0x0205), 0x00 },
++	{ CCI_REG8(0x020e), 0x01 },
++	{ CCI_REG8(0x020f), 0x00 },
++	{ CCI_REG8(0x0216), 0x00 },
++	{ CCI_REG8(0x0217), 0x00 },
++	{ CCI_REG8(0x0218), 0x01 },
++	{ CCI_REG8(0x0219), 0x00 },
++	{ CCI_REG8(0x313c), 0x00 },
++	{ CCI_REG8(0x313d), 0x00 },
++	{ CCI_REG8(0x313e), 0x01 },
++	{ CCI_REG8(0x313f), 0x00 },
++	{ CCI_REG8(0x3100), 0x00 },
++	{ CCI_REG8(0x30b5), 0x00 },
++	{ CCI_REG8(0x30b6), 0x00 },
++	{ CCI_REG8(0x30b9), 0x00 },
++	{ CCI_REG8(0x3070), 0x00 },
++	{ CCI_REG8(0x3071), 0x30 },
++	{ CCI_REG8(0x30b7), 0x00 },
++	{ CCI_REG8(0x30b8), 0x00 },
++	{ CCI_REG8(0x30ba), 0x00 },
++	{ CCI_REG8(0x30bc), 0x01 },
++	{ CCI_REG8(0x3078), 0x00 },
++	{ CCI_REG8(0x3079), 0x30 },
++	{ CCI_REG8(0x307a), 0x00 },
++	{ CCI_REG8(0x307b), 0x30 },
++	{ CCI_REG8(0x30b3), 0x00 },
++	{ CCI_REG8(0x3474), 0x00 },
++	{ CCI_REG8(0x3475), 0x00 },
++	{ CCI_REG8(0x3076), 0x00 },
++	{ CCI_REG8(0x3077), 0x30 },
++	{ CCI_REG8(0x33d0), 0x00 },
++	{ CCI_REG8(0x33d1), 0x00 },
++	{ CCI_REG8(0x33d4), 0x01 },
++	{ CCI_REG8(0x33dc), 0x0a },
++	{ CCI_REG8(0x33dd), 0x0a },
++	{ CCI_REG8(0x33de), 0x0a },
++	{ CCI_REG8(0x33df), 0x0a },
++	{ CCI_REG8(0x3080), 0x01 },
++	{ CCI_REG8(0x3082), 0x01 },
++	{ CCI_REG8(0x3084), 0x01 },
++	{ CCI_REG8(0x3086), 0x01 },
++	{ CCI_REG8(0x3088), 0x01 },
++	{ CCI_REG8(0x3089), 0x30 },
++	{ CCI_REG8(0x308a), 0x01 },
++	{ CCI_REG8(0x308b), 0x30 },
++	{ CCI_REG8(0x308c), 0x01 },
++	{ CCI_REG8(0x308d), 0x30 },
++	{ CCI_REG8(0x3090), 0x02 },
++	{ CCI_REG8(0x3092), 0x02 },
++	{ CCI_REG8(0x3094), 0x02 },
++	{ CCI_REG8(0x3096), 0x02 },
++	{ CCI_REG8(0x3098), 0x02 },
++	{ CCI_REG8(0x3099), 0x30 },
++	{ CCI_REG8(0x309a), 0x02 },
++	{ CCI_REG8(0x309b), 0x30 },
++	{ CCI_REG8(0x309c), 0x02 },
++	{ CCI_REG8(0x309d), 0x30 },
++	{ CCI_REG8(0x3905), 0x2b },
++	{ CCI_REG8(0x3906), 0x00 },
++	{ CCI_REG8(0x3907), 0x12 },
++	{ CCI_REG8(0x3909), 0x2b },
++	{ CCI_REG8(0x390a), 0x01 },
++	{ CCI_REG8(0x390b), 0x12 },
++	{ CCI_REG8(0x390d), 0x2b },
++	{ CCI_REG8(0x390e), 0x02 },
++	{ CCI_REG8(0x390f), 0x12 },
++	{ CCI_REG8(0x3911), 0x00 },
++	{ CCI_REG8(0xb147), 0x40 },
++	{ CCI_REG8(0x32d6), 0x00 },
++	{ CCI_REG8(0x380c), 0x00 },
++};
++
++static const s64 imx789_link_freqs[] = {
++	480000000,	/* 19.2 MHz / 2 * 400 / 4 = 960 Msps */
++	1092000000,	/* 19.2 MHz / 2 * 455 / 2 = 2184 Msps */
++};
++
+ static const struct imx789_mode imx789_modes[] = {
+ 	{
+ 		.width = 4000,
+@@ -758,14 +941,34 @@ static const struct imx789_mode imx789_modes[] = {
+ 		.fll = 3144,
+ 		.llp = 18880,
+ 		.crop = {
+-			.left = 0,
++			.left = 352,
+ 			.top = 0,
+ 			.width = 8000,
+ 			.height = 6016,
+ 		},
++		/* VT PLL: 19.2 MHz / 3 * 174 / 5, eight pixels per clock */
++		.pixel_rate = 1781760000,
++		.link_freq_index = 0,
+ 		.regs = imx789_mode_4000x3008_regs,
+ 		.num_regs = ARRAY_SIZE(imx789_mode_4000x3008_regs),
+ 	},
++	{
++		.width = 2176,
++		.height = 1224,
++		.fll = 11380,
++		.llp = 10288,
++		.crop = {
++			.left = 0,
++			.top = 544,
++			.width = 8704,
++			.height = 4896,
++		},
++		/* VT PLL: 19.2 MHz / 3 * 343 / 5, eight pixels per clock */
++		.pixel_rate = 3512320000,
++		.link_freq_index = 1,
++		.regs = imx789_mode_2176x1224_regs,
++		.num_regs = ARRAY_SIZE(imx789_mode_2176x1224_regs),
++	},
+ };
+ 
+ static const struct imx789_chip imx789_chip = {
+@@ -775,11 +978,9 @@ static const struct imx789_chip imx789_chip = {
+ 	.num_init_regs = ARRAY_SIZE(imx789_init_regs),
+ 	.modes = imx789_modes,
+ 	.num_modes = ARRAY_SIZE(imx789_modes),
+-	/* 19.2 MHz / 2 * 400 / 4 = 960 Msps */
+-	.link_freq = 480000000,
+-	/* VT PLL: 19.2 MHz / 3 * 174 / 5, eight pixels per clock */
+-	.pixel_rate = 1781760000,
+-	.native_width = 8000,
++	.link_freqs = imx789_link_freqs,
++	.num_link_freqs = ARRAY_SIZE(imx789_link_freqs),
++	.native_width = 8704,
+ 	.native_height = 6016,
+ };
+ 
+@@ -1005,6 +1206,10 @@ static const struct cci_reg_sequence imx766_mode_4096x3072_regs[] = {
+ 	{ CCI_REG8(0x30cb), 0x00 },
+ };
+ 
++static const s64 imx766_link_freqs[] = {
++	537600000,	/* 19.2 MHz / 2 * 224 / 2 = 1075.2 Msps */
++};
++
+ static const struct imx789_mode imx766_modes[] = {
+ 	{
+ 		.width = 4096,
+@@ -1017,6 +1222,9 @@ static const struct imx789_mode imx766_modes[] = {
+ 			.width = 8192,
+ 			.height = 6144,
+ 		},
++		/* VT PLL: 19.2 MHz / 3 * 316 / 5, four pixels per clock */
++		.pixel_rate = 1617920000,
++		.link_freq_index = 0,
+ 		.regs = imx766_mode_4096x3072_regs,
+ 		.num_regs = ARRAY_SIZE(imx766_mode_4096x3072_regs),
+ 	},
+@@ -1029,10 +1237,8 @@ static const struct imx789_chip imx766_chip = {
+ 	.num_init_regs = ARRAY_SIZE(imx766_init_regs),
+ 	.modes = imx766_modes,
+ 	.num_modes = ARRAY_SIZE(imx766_modes),
+-	/* 19.2 MHz / 2 * 224 / 2 = 1075.2 Msps */
+-	.link_freq = 537600000,
+-	/* VT PLL: 19.2 MHz / 3 * 316 / 5, four pixels per clock */
+-	.pixel_rate = 1617920000,
++	.link_freqs = imx766_link_freqs,
++	.num_link_freqs = ARRAY_SIZE(imx766_link_freqs),
+ 	.native_width = 8192,
+ 	.native_height = 6144,
+ };
+@@ -1178,6 +1384,15 @@ static int imx789_set_pad_format(struct v4l2_subdev *sd,
+ 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
+ 		return 0;
+ 
++	ret = __v4l2_ctrl_s_ctrl(sensor->link_freq, mode->link_freq_index);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_modify_range(sensor->pixel_rate, mode->pixel_rate,
++				       mode->pixel_rate, 1, mode->pixel_rate);
++	if (ret)
++		return ret;
++
+ 	ret = __v4l2_ctrl_modify_range(sensor->vblank,
+ 				       mode->fll - mode->height,
+ 				       IMX789_FLL_MAX - mode->height, 1,
+@@ -1185,6 +1400,10 @@ static int imx789_set_pad_format(struct v4l2_subdev *sd,
+ 	if (ret)
+ 		return ret;
+ 
++	ret = __v4l2_ctrl_s_ctrl(sensor->vblank, mode->fll - mode->height);
++	if (ret)
++		return ret;
++
+ 	return __v4l2_ctrl_modify_range(sensor->hblank,
+ 					mode->llp - mode->width,
+ 					mode->llp - mode->width, 1,
+@@ -1362,10 +1581,8 @@ static int imx789_power_off(struct device *dev)
+ static int imx789_init_controls(struct imx789 *sensor)
+ {
+ 	const struct imx789_mode *mode = &sensor->chip->modes[0];
+-	u64 pixel_rate = sensor->chip->pixel_rate;
+ 	struct v4l2_fwnode_device_properties props;
+ 	struct v4l2_ctrl_handler *hdl = &sensor->ctrls;
+-	struct v4l2_ctrl *ctrl;
+ 	int ret;
+ 
+ 	ret = v4l2_fwnode_device_parse(sensor->dev, &props);
+@@ -1374,13 +1591,19 @@ static int imx789_init_controls(struct imx789 *sensor)
+ 
+ 	v4l2_ctrl_handler_init(hdl, 12);
+ 
+-	ctrl = v4l2_ctrl_new_int_menu(hdl, &imx789_ctrl_ops, V4L2_CID_LINK_FREQ,
+-				      0, 0, &sensor->chip->link_freq);
+-	if (ctrl)
+-		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
++	sensor->link_freq = v4l2_ctrl_new_int_menu(hdl, &imx789_ctrl_ops,
++						   V4L2_CID_LINK_FREQ,
++						   sensor->chip->num_link_freqs - 1,
++						   mode->link_freq_index,
++						   sensor->chip->link_freqs);
++	if (sensor->link_freq)
++		sensor->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+ 
+-	v4l2_ctrl_new_std(hdl, &imx789_ctrl_ops, V4L2_CID_PIXEL_RATE,
+-			  pixel_rate, pixel_rate, 1, pixel_rate);
++	sensor->pixel_rate = v4l2_ctrl_new_std(hdl, &imx789_ctrl_ops,
++					       V4L2_CID_PIXEL_RATE,
++					       mode->pixel_rate,
++					       mode->pixel_rate, 1,
++					       mode->pixel_rate);
+ 
+ 	sensor->vblank = v4l2_ctrl_new_std(hdl, &imx789_ctrl_ops,
+ 					   V4L2_CID_VBLANK,
+@@ -1464,7 +1687,8 @@ static int imx789_parse_endpoint(struct imx789 *sensor)
+ 
+ 	ret = v4l2_link_freq_to_bitmap(sensor->dev, ep.link_frequencies,
+ 				       ep.nr_of_link_frequencies,
+-				       &sensor->chip->link_freq, 1, &bitmap);
++				       sensor->chip->link_freqs,
++				       sensor->chip->num_link_freqs, &bitmap);
+ out:
+ 	v4l2_fwnode_endpoint_free(&ep);
+ 

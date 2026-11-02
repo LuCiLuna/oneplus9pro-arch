@@ -1,0 +1,6 @@
+#!/bin/sh
+# Mark the A/B slot we booted from as successful (like Android update_verifier/boot_control),
+# so ABL keeps booting it instead of counting down its retries.
+slot=$(sed -n "s/.*androidboot.slot_suffix=_\([ab]\).*/\1/p" /proc/cmdline)
+[ -n "$slot" ] || { echo "no androidboot.slot_suffix"; exit 1; }
+exec /usr/local/bin/op9-slot mark-successful "$slot" --write

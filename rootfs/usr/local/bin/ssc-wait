@@ -1,0 +1,10 @@
+#!/bin/sh
+# Wait (up to ~60 s) until the SLPI sensor service reports accelerometer
+# samples. iio-sensor-proxy only probes its sensors once, and at boot it
+# starts while the SLPI is still loading its registry through hexagonrpcd.
+for i in $(seq 1 20); do
+	timeout 5 ssccli --sensor accelerometer --timeout 2 2>/dev/null | grep -q measurement && exit 0
+	sleep 1
+done
+echo "ssc-wait: no accelerometer from the SLPI, starting anyway" >&2
+exit 0

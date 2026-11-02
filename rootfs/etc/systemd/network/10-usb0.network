@@ -1,0 +1,20 @@
+# USB gadget (NCM) link to the PC set up by the bring-up initramfs
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+DHCPServer=yes
+# Internet via the PC, if it NATs for us
+Gateway=172.16.42.2
+DNS=1.1.1.1
+
+[DHCPServer]
+PoolOffset=2
+PoolSize=1
+EmitRouter=no
+EmitDNS=no
+
+[Link]
+# only there with a PC attached: its lack of carrier must not make us "offline", which stops NTP
+RequiredForOnline=no

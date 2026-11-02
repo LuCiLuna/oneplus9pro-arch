@@ -1,0 +1,31 @@
+diff --git a/src/iio-sensor-proxy.c b/src/iio-sensor-proxy.c
+index 9c7e8cd..b257704 100644
+--- a/src/iio-sensor-proxy.c
++++ b/src/iio-sensor-proxy.c
+@@ -240,7 +240,7 @@ send_dbus_event_for_client (SensorData     *data,
+ 	GVariantBuilder props_builder;
+ 	GVariant *props_changed = NULL;
+ 
+-	g_return_if_fail (destination_bus_name != NULL);
++	/* NULL destination broadcasts, see name_acquired_handler() */
+ 
+ 	g_variant_builder_init (&props_builder, G_VARIANT_TYPE ("a{sv}"));
+ 
+@@ -786,6 +786,17 @@ name_acquired_handler (GDBusConnection *connection,
+ 
+ 	send_dbus_event (data, PROP_ALL);
+ 	send_dbus_event (data, PROP_ALL_COMPASS);
++
++	/*
++	 * Opening SSC sensors blocks on a nested main loop while the bus name
++	 * is already ours, so clients that read the properties right after
++	 * the name appeared were told there are no sensors. Change
++	 * notifications only go to claimants, which those clients never
++	 * become; broadcast the sensor availability once it is known.
++	 */
++	send_dbus_event_for_client (data, NULL, PROP_HAS_ACCELEROMETER |
++				    PROP_HAS_AMBIENT_LIGHT | PROP_HAS_PROXIMITY);
++	send_dbus_event_for_client (data, NULL, PROP_HAS_COMPASS);
+ 	return;
+ 
+ bail:

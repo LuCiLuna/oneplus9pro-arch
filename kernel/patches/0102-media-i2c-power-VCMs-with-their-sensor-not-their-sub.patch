@@ -1,0 +1,227 @@
+From e986ff3a55f0bbf6018d2794ef8fba0368693f89 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 09:39:21 -0600
+Subject: [PATCH 102/110] media: i2c: power VCMs with their sensor, not their
+ subdev node
+
+ak7375 and lc898229 power on while their subdev is open. libcamera opens
+lens subdevs when a camera manager starts and keeps them open, and PipeWire's
+libcamera monitor runs for the whole session, so the lenses were never off.
+On OnePlus 9 Pro that cost about 45 mA from the 8 V battery (108/114 mA with
+it, 63/69 mA without, screen blanked), or 360 mW for an unused camera.
+
+Add a stateless runtime PM device link from the sensor naming the lens in
+lens-focus, so the lens follows the sensor like its other supplies. Control
+writes made while it is off are applied when it next powers on, which both
+drivers already do on resume. Without such a sensor they keep using open and
+close.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/ak7375.c           | 31 +++++++++++++++++---
+ drivers/media/i2c/lc898229.c         | 17 ++++++++++-
+ drivers/media/i2c/lens-sensor-link.h | 43 ++++++++++++++++++++++++++++
+ 3 files changed, 86 insertions(+), 5 deletions(-)
+ create mode 100644 drivers/media/i2c/lens-sensor-link.h
+
+diff --git a/drivers/media/i2c/ak7375.c b/drivers/media/i2c/ak7375.c
+index 91141f3293f..a76d4fe14c6 100644
+--- a/drivers/media/i2c/ak7375.c
++++ b/drivers/media/i2c/ak7375.c
+@@ -10,6 +10,8 @@
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
+ 
++#include "lens-sensor-link.h"
++
+ struct ak73xx_chipdef {
+ 	u8 reg_position;
+ 	u8 reg_cont;
+@@ -77,6 +79,7 @@ struct ak7375_device {
+ 	struct v4l2_subdev sd;
+ 	struct v4l2_ctrl *focus;
+ 	struct regulator_bulk_data supplies[ARRAY_SIZE(ak7375_supply_names)];
++	struct device_link *sensor_link;
+ 
+ 	/* active or standby mode */
+ 	bool active;
+@@ -118,12 +121,21 @@ static int ak7375_set_ctrl(struct v4l2_ctrl *ctrl)
+ {
+ 	struct ak7375_device *dev_vcm = to_ak7375_vcm(ctrl);
+ 	const struct ak73xx_chipdef *cdef = dev_vcm->cdef;
++	int ret;
++
++	if (ctrl->id != V4L2_CID_FOCUS_ABSOLUTE)
++		return -EINVAL;
++
++	/* Powered off: ak7375_vcm_resume() moves the lens here */
++	if (pm_runtime_get_if_in_use(dev_vcm->sd.dev) <= 0)
++		return 0;
++
++	ret = ak7375_i2c_write(dev_vcm, cdef->reg_position,
++			       ctrl->val << cdef->shift_pos, 2);
+ 
+-	if (ctrl->id == V4L2_CID_FOCUS_ABSOLUTE)
+-		return ak7375_i2c_write(dev_vcm, cdef->reg_position,
+-					ctrl->val << cdef->shift_pos, 2);
++	pm_runtime_put(dev_vcm->sd.dev);
+ 
+-	return -EINVAL;
++	return ret;
+ }
+ 
+ static const struct v4l2_ctrl_ops ak7375_vcm_ctrl_ops = {
+@@ -132,11 +144,17 @@ static const struct v4l2_ctrl_ops ak7375_vcm_ctrl_ops = {
+ 
+ static int ak7375_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+ {
++	if (sd_to_ak7375_vcm(sd)->sensor_link)
++		return 0;
++
+ 	return pm_runtime_resume_and_get(sd->dev);
+ }
+ 
+ static int ak7375_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+ {
++	if (sd_to_ak7375_vcm(sd)->sensor_link)
++		return 0;
++
+ 	pm_runtime_put(sd->dev);
+ 
+ 	return 0;
+@@ -220,6 +238,8 @@ static int ak7375_probe(struct i2c_client *client)
+ 	pm_runtime_enable(&client->dev);
+ 	pm_runtime_idle(&client->dev);
+ 
++	ak7375_dev->sensor_link = lens_link_sensor(&client->dev);
++
+ 	return 0;
+ 
+ err_cleanup:
+@@ -234,6 +254,9 @@ static void ak7375_remove(struct i2c_client *client)
+ 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+ 	struct ak7375_device *ak7375_dev = sd_to_ak7375_vcm(sd);
+ 
++	if (ak7375_dev->sensor_link)
++		device_link_del(ak7375_dev->sensor_link);
++
+ 	ak7375_subdev_cleanup(ak7375_dev);
+ 	pm_runtime_disable(&client->dev);
+ 	pm_runtime_set_suspended(&client->dev);
+diff --git a/drivers/media/i2c/lc898229.c b/drivers/media/i2c/lc898229.c
+index 2ab235804a7..de42f4d7dd1 100644
+--- a/drivers/media/i2c/lc898229.c
++++ b/drivers/media/i2c/lc898229.c
+@@ -17,6 +17,8 @@
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
+ 
++#include "lens-sensor-link.h"
++
+ #define LC898229_REG_POSITION		CCI_REG16(0x84)
+ #define LC898229_REG_STATUS		CCI_REG8(0xb3)
+ #define LC898229_REG_STANDBY		CCI_REG8(0xe0)
+@@ -36,6 +38,7 @@ struct lc898229 {
+ 	struct v4l2_ctrl *focus;
+ 	struct regmap *regmap;
+ 	struct regulator_bulk_data supplies[ARRAY_SIZE(lc898229_supply_names)];
++	struct device_link *sensor_link;
+ };
+ 
+ static inline struct lc898229 *to_lc898229(struct v4l2_subdev *sd)
+@@ -52,7 +55,8 @@ static int lc898229_set_ctrl(struct v4l2_ctrl *ctrl)
+ 	if (ctrl->id != V4L2_CID_FOCUS_ABSOLUTE)
+ 		return -EINVAL;
+ 
+-	if (!pm_runtime_get_if_in_use(vcm->sd.dev))
++	/* Powered off: lc898229_power_on() moves the lens here */
++	if (pm_runtime_get_if_in_use(vcm->sd.dev) <= 0)
+ 		return 0;
+ 
+ 	ret = cci_write(vcm->regmap, LC898229_REG_POSITION, ctrl->val, NULL);
+@@ -68,11 +72,17 @@ static const struct v4l2_ctrl_ops lc898229_ctrl_ops = {
+ 
+ static int lc898229_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+ {
++	if (to_lc898229(sd)->sensor_link)
++		return 0;
++
+ 	return pm_runtime_resume_and_get(sd->dev);
+ }
+ 
+ static int lc898229_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+ {
++	if (to_lc898229(sd)->sensor_link)
++		return 0;
++
+ 	pm_runtime_put(sd->dev);
+ 
+ 	return 0;
+@@ -181,6 +191,8 @@ static int lc898229_probe(struct i2c_client *client)
+ 	if (ret)
+ 		goto err_pm;
+ 
++	vcm->sensor_link = lens_link_sensor(dev);
++
+ 	return 0;
+ 
+ err_pm:
+@@ -197,6 +209,9 @@ static void lc898229_remove(struct i2c_client *client)
+ 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+ 	struct lc898229 *vcm = to_lc898229(sd);
+ 
++	if (vcm->sensor_link)
++		device_link_del(vcm->sensor_link);
++
+ 	v4l2_async_unregister_subdev(sd);
+ 	v4l2_ctrl_handler_free(&vcm->ctrls);
+ 	media_entity_cleanup(&sd->entity);
+diff --git a/drivers/media/i2c/lens-sensor-link.h b/drivers/media/i2c/lens-sensor-link.h
+new file mode 100644
+index 00000000000..fe3dbace09d
+--- /dev/null
++++ b/drivers/media/i2c/lens-sensor-link.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __LENS_SENSOR_LINK_H
++#define __LENS_SENSOR_LINK_H
++
++#include <linux/device.h>
++#include <linux/i2c.h>
++#include <linux/of.h>
++
++/*
++ * Tie a VCM's runtime PM to the sensor naming it in lens-focus. Powering it for
++ * as long as its subdev is open keeps it on all the time on a phone: libcamera
++ * opens lens subdevs when a camera manager starts and PipeWire's monitor never
++ * stops. Returns NULL if there is no such sensor, for the caller to fall back
++ * on open and close.
++ */
++static inline struct device_link *lens_link_sensor(struct device *dev)
++{
++	struct device_link *link = NULL;
++	struct device_node *np;
++
++	for_each_node_with_property(np, "lens-focus") {
++		struct device_node *lens = of_parse_phandle(np, "lens-focus", 0);
++		struct i2c_client *sensor;
++
++		of_node_put(lens);
++		if (lens != dev->of_node)
++			continue;
++
++		sensor = of_find_i2c_device_by_node(np);
++		of_node_put(np);
++		if (sensor) {
++			link = device_link_add(&sensor->dev, dev,
++					       DL_FLAG_STATELESS |
++					       DL_FLAG_PM_RUNTIME);
++			put_device(&sensor->dev);
++		}
++		break;
++	}
++
++	return link;
++}
++
++#endif

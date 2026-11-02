@@ -1,0 +1,50 @@
+# Hardware notes
+
+What was found while bringing up this phone, for anyone working on SM8350 or similar devices.
+
+## Boot
+
+- The bootloader (ABL) rejects mainline-style device trees. It has to apply the stock DTBO to real
+  downstream nodes. So the image carries the stock DTBs, and `CONFIG_ARM64_OP9_BUILTIN_DTB` swaps in
+  the mainline one at boot.
+- Images must be boot header v2 with an uncompressed `Image`.
+- The firmware runs the Gunyah hypervisor. Its watchdog resets the phone after about 10 seconds
+  unless it's handled early in boot.
+- The boot GPT is on a UFS LUN with 4096-byte sectors and only 96 entries. Don't let `sgdisk` rewrite
+  it. `tools/op9-slot.c` edits just the slot attribute bits.
+
+## Components
+
+| Part | Details |
+|---|---|
+| Panel | Samsung AMB670YF01, DSC command mode |
+| Touch | Synaptics S3908, I2C4 at `0x4b`; GPIO 197 is an eGPIO |
+| GPU | Adreno 660 |
+| Wi-Fi and Bluetooth | QCA6490 v1, driven as a WCN6855 in `ath11k` with trimmed firmware memory |
+| Speakers | 2x NXP TFA9874, I2C19 at `0x34` (top) and `0x35` (bottom) |
+| Codec | WCD9380 over SoundWire; phone mics are DMIC1 and DMIC3 |
+| Battery gauge | BQ28Z610, 2 cells in series |
+| Main camera | Sony IMX789, 3-trio C-PHY, AK7377 focus at `0x0c` |
+| Ultrawide | Sony IMX766, C-PHY, LC898229 focus at `0x72` |
+| Telephoto | OmniVision OV08A10, 2-lane D-PHY, AK7377 focus at `0x0f` |
+| Mono | GalaxyCore GC02M1B, 1-lane |
+| Front camera | Sony IMX471 |
+| Sensors | On the SLPI, reached with hexagonrpcd and libssc |
+
+## Things that cost a lot of time
+
+- **Memory scaling:** mainline `sm8350.dtsi` had no bandwidth monitors, no CPU or L3 votes, and no GPU
+  memory path, so DDR stayed slow under load (3–4 GB/s memcpy). 4K60 video then made the video
+  firmware time out while parsing VP9 headers.
+- **Firmware log:** gen1 Iris firmware reports useful errors if you send `HFI_PROPERTY_SYS_DEBUG_CONFIG`.
+  That's what exposed the VP9 timeout.
+- **Display flashes:** in command mode with autorefresh, `CTL_START` never fires, so flip events
+  went out before the flush latched and the compositor painted over the buffer being scanned out.
+- **Wi-Fi firmware crashes:** PCIe had no interconnect votes, so the link starved once boot votes
+  were dropped.
+- **Sleep drain:** the MI2S bit clock was never stopped in the DSP, so the ADSP couldn't sleep.
+- **USB replug:** charger detection takes over DP/DM and leaves the PHY in a state that stops
+  re-enumeration, so the PHY datapath has to be reclaimed.
+- **OTG:** the charger firmware keeps Type-C sink-only until the AP sets the OnePlus-specific properties.
+- **Unsafe register access:** reading unclocked display or LPASS registers from Linux, for example
+  through `/dev/mem`, hangs the phone. Only use `tools/regdump.c` if you know the clocks are on.

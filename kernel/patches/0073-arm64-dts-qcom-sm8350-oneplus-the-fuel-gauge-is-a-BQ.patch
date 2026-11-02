@@ -1,0 +1,29 @@
+From c6ff1023f7ec439abd7eae1f40a61782fa066a40 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 02:00:28 +0000
+Subject: [PATCH 073/110] arm64: dts: qcom: sm8350-oneplus: the fuel gauge is a
+ BQ28Z610
+
+The gauge at 0x55 on i2c2 is the dual cell BQ28Z610 (the vendor DT
+flags it as qcom,batt_bq28z610). As a bq27541 the remaining capacity
+came from the wrong register and read near zero; the BQ28Z610 map gives
+a correct charge, energy and time to full.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index f22ccf14694..33b659f90ac 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -619,7 +619,7 @@ &i2c2 {
+ 	status = "okay";
+ 
+ 	bq27541: fuel-gauge@55 {
+-		compatible = "ti,bq27541";
++		compatible = "ti,bq28z610";
+ 		reg = <0x55>;
+ 		monitored-battery = <&bat>;
+ 	};

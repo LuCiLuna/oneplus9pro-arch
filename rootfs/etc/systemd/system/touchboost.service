@@ -1,0 +1,10 @@
+[Unit]
+Description=Raise CPU minimum clocks while the touchscreen is in use
+
+[Service]
+ExecStart=/usr/local/bin/touchboost
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

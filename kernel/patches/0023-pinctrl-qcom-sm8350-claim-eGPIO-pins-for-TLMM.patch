@@ -1,0 +1,45 @@
+From d7ad0cdef5d78c4ec42024e2fe396e6fdb685a32 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:03:00 +0000
+Subject: [PATCH 023/110] pinctrl: qcom: sm8350: claim eGPIO pins for TLMM
+
+Like sc7280, sm8350 has eGPIO-capable pins (bit 11 of the config
+register) that can be owned by an island subsystem until bit 12 hands
+them to TLMM. The driver never described these bits, so on the OnePlus 9
+Pro GPIO 197 (touchscreen 1.8 V enable) stayed island-owned: "output
+high" never reached the pad and the touch controller clamped its I2C bus.
+
+Describe the bits and set egpio_func so the core claims such pins when a
+function is selected.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pinctrl/qcom/pinctrl-sm8350.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/pinctrl/qcom/pinctrl-sm8350.c b/drivers/pinctrl/qcom/pinctrl-sm8350.c
+index 8bd278c9717..8d688577e8f 100644
+--- a/drivers/pinctrl/qcom/pinctrl-sm8350.c
++++ b/drivers/pinctrl/qcom/pinctrl-sm8350.c
+@@ -48,6 +48,8 @@
+ 		.intr_polarity_bit = 1,		\
+ 		.intr_detection_bit = 2,	\
+ 		.intr_detection_width = 2,	\
++		.egpio_enable = 12,		\
++		.egpio_present = 11,		\
+ 	}
+ 
+ #define SDC_PINGROUP(pg_name, ctl, pull, drv)	\
+@@ -1619,6 +1621,12 @@ static const struct msm_pinctrl_soc_data sm8350_tlmm = {
+ 	.groups = sm8350_groups,
+ 	.ngroups = ARRAY_SIZE(sm8350_groups),
+ 	.ngpios = 204,
++	/*
++	 * eGPIO-capable pins (e.g. 197) can be owned by an island subsystem;
++	 * no pin muxes "egpio" yet, but setting this makes the core claim
++	 * the pin for TLMM whenever a function is selected.
++	 */
++	.egpio_func = 9,
+ 	.wakeirq_map = sm8350_pdc_map,
+ 	.nwakeirq_map = ARRAY_SIZE(sm8350_pdc_map),
+ };

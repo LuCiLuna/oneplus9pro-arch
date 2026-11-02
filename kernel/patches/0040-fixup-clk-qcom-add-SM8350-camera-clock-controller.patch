@@ -1,0 +1,491 @@
+From 74d0d34938349beb19b7fc60d5b138ffc91fd1b3 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 11:06:19 +0000
+Subject: [PATCH 040/110] fixup! clk: qcom: add SM8350 camera clock controller
+
+Vote MXC as well as MMCX, use the core use_rpm/driver_data probe, park the
+RCGs downstream marks enable_safe_config on XO (clk_rcg2_shared_ops) and
+use the SC7280 GDSC timings without CFG polling. Without the parked RCGs
+the IFE GDSCs never power up again after their first collapse.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/clk/qcom/camcc-sm8350.c | 157 +++++++++++++++++---------------
+ 1 file changed, 85 insertions(+), 72 deletions(-)
+
+diff --git a/drivers/clk/qcom/camcc-sm8350.c b/drivers/clk/qcom/camcc-sm8350.c
+index cbf1cb8f29f..42c3d01d45e 100644
+--- a/drivers/clk/qcom/camcc-sm8350.c
++++ b/drivers/clk/qcom/camcc-sm8350.c
+@@ -566,7 +566,7 @@ static struct clk_rcg2 cam_cc_bps_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -588,7 +588,7 @@ static struct clk_rcg2 cam_cc_camnoc_axi_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -609,7 +609,7 @@ static struct clk_rcg2 cam_cc_cci_0_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -624,7 +624,7 @@ static struct clk_rcg2 cam_cc_cci_1_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -645,7 +645,7 @@ static struct clk_rcg2 cam_cc_cphy_rx_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -666,7 +666,7 @@ static struct clk_rcg2 cam_cc_csi0phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -681,7 +681,7 @@ static struct clk_rcg2 cam_cc_csi1phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -696,7 +696,7 @@ static struct clk_rcg2 cam_cc_csi2phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -711,7 +711,7 @@ static struct clk_rcg2 cam_cc_csi3phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -726,7 +726,7 @@ static struct clk_rcg2 cam_cc_csi4phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -741,7 +741,7 @@ static struct clk_rcg2 cam_cc_csi5phytimer_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -765,7 +765,7 @@ static struct clk_rcg2 cam_cc_fast_ahb_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -788,7 +788,7 @@ static struct clk_rcg2 cam_cc_icp_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -812,7 +812,7 @@ static struct clk_rcg2 cam_cc_ife_0_clk_src = {
+ 		.parent_data = cam_cc_parent_data_2,
+ 		.num_parents = 3,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -834,7 +834,7 @@ static struct clk_rcg2 cam_cc_ife_0_csid_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -858,7 +858,7 @@ static struct clk_rcg2 cam_cc_ife_1_clk_src = {
+ 		.parent_data = cam_cc_parent_data_3,
+ 		.num_parents = 3,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -873,7 +873,7 @@ static struct clk_rcg2 cam_cc_ife_1_csid_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -896,7 +896,7 @@ static struct clk_rcg2 cam_cc_ife_2_clk_src = {
+ 		.parent_data = cam_cc_parent_data_4,
+ 		.num_parents = 3,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -916,7 +916,7 @@ static struct clk_rcg2 cam_cc_ife_2_csid_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -938,7 +938,7 @@ static struct clk_rcg2 cam_cc_ife_lite_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -953,7 +953,7 @@ static struct clk_rcg2 cam_cc_ife_lite_csid_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -977,7 +977,7 @@ static struct clk_rcg2 cam_cc_ipe_0_clk_src = {
+ 		.parent_data = cam_cc_parent_data_5,
+ 		.num_parents = 3,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -992,7 +992,7 @@ static struct clk_rcg2 cam_cc_jpeg_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1014,7 +1014,7 @@ static struct clk_rcg2 cam_cc_mclk0_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1029,7 +1029,7 @@ static struct clk_rcg2 cam_cc_mclk1_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1044,7 +1044,7 @@ static struct clk_rcg2 cam_cc_mclk2_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1059,7 +1059,7 @@ static struct clk_rcg2 cam_cc_mclk3_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1074,7 +1074,7 @@ static struct clk_rcg2 cam_cc_mclk4_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1089,7 +1089,7 @@ static struct clk_rcg2 cam_cc_mclk5_clk_src = {
+ 		.parent_data = cam_cc_parent_data_1,
+ 		.num_parents = 4,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1104,7 +1104,7 @@ static struct clk_rcg2 cam_cc_sbi_csid_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1124,7 +1124,7 @@ static struct clk_rcg2 cam_cc_sleep_clk_src = {
+ 		.parent_data = cam_cc_parent_data_6,
+ 		.num_parents = 2,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1145,7 +1145,7 @@ static struct clk_rcg2 cam_cc_slow_ahb_clk_src = {
+ 		.parent_data = cam_cc_parent_data_0,
+ 		.num_parents = 6,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -1165,7 +1165,7 @@ static struct clk_rcg2 cam_cc_xo_clk_src = {
+ 		.parent_data = cam_cc_parent_data_7_ao,
+ 		.num_parents = 2,
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_shared_ops,
+ 	},
+ };
+ 
+@@ -2586,69 +2586,90 @@ static struct clk_regmap *cam_cc_sm8350_clocks[] = {
+ 
+ static struct gdsc titan_top_gdsc = {
+ 	.gdscr = 0xc120,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "titan_top_gdsc",
+ 	},
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = RETAIN_FF_ENABLE,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc bps_gdsc = {
+ 	.gdscr = 0x7004,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "bps_gdsc",
+ 	},
+-	.flags = HW_CTRL | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = HW_CTRL | RETAIN_FF_ENABLE,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc ipe_0_gdsc = {
+ 	.gdscr = 0x8004,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "ipe_0_gdsc",
+ 	},
+-	.flags = HW_CTRL | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = HW_CTRL | RETAIN_FF_ENABLE,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc sbi_gdsc = {
+ 	.gdscr = 0x9004,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "sbi_gdsc",
+ 	},
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = RETAIN_FF_ENABLE,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc ife_0_gdsc = {
+ 	.gdscr = 0xa004,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "ife_0_gdsc",
+ 	},
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = 0,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc ife_1_gdsc = {
+ 	.gdscr = 0xb004,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "ife_1_gdsc",
+ 	},
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = 0,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 
+ static struct gdsc ife_2_gdsc = {
+ 	.gdscr = 0xb070,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
+ 	.pd = {
+ 		.name = "ife_2_gdsc",
+ 	},
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = 0,
+ 	.parent = &titan_top_gdsc.pd,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+@@ -2681,6 +2702,27 @@ static const struct regmap_config cam_cc_sm8350_regmap_config = {
+ 	.fast_io = true,
+ };
+ 
++static void cam_cc_sm8350_clk_regs_configure(struct device *dev, struct regmap *regmap)
++{
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll0, regmap, &cam_cc_pll0_config);
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll1, regmap, &cam_cc_pll1_config);
++	clk_zonda_pll_configure(&cam_cc_pll2, regmap, &cam_cc_pll2_config_sm8350_v2);
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll3, regmap, &cam_cc_pll3_config);
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll4, regmap, &cam_cc_pll4_config);
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll5, regmap, &cam_cc_pll5_config);
++	clk_lucid_5lpe_pll_configure(&cam_cc_pll6, regmap, &cam_cc_pll6_config);
++}
++
++static const u32 cam_cc_sm8350_critical_cbcrs[] = {
++	0xc148, /* CAM_CC_GDSC_CLK */
++};
++
++static const struct qcom_cc_driver_data cam_cc_sm8350_driver_data = {
++	.clk_cbcrs = cam_cc_sm8350_critical_cbcrs,
++	.num_clk_cbcrs = ARRAY_SIZE(cam_cc_sm8350_critical_cbcrs),
++	.clk_regs_configure = cam_cc_sm8350_clk_regs_configure,
++};
++
+ static const struct qcom_cc_desc cam_cc_sm8350_desc = {
+ 	.config = &cam_cc_sm8350_regmap_config,
+ 	.clks = cam_cc_sm8350_clocks,
+@@ -2689,6 +2731,8 @@ static const struct qcom_cc_desc cam_cc_sm8350_desc = {
+ 	.num_resets = ARRAY_SIZE(cam_cc_sm8350_resets),
+ 	.gdscs = cam_cc_sm8350_gdscs,
+ 	.num_gdscs = ARRAY_SIZE(cam_cc_sm8350_gdscs),
++	.use_rpm = true,
++	.driver_data = &cam_cc_sm8350_driver_data,
+ };
+ 
+ static const struct of_device_id cam_cc_sm8350_match_table[] = {
+@@ -2699,38 +2743,7 @@ MODULE_DEVICE_TABLE(of, cam_cc_sm8350_match_table);
+ 
+ static int cam_cc_sm8350_probe(struct platform_device *pdev)
+ {
+-	struct regmap *regmap;
+-	int ret;
+-
+-	ret = devm_pm_runtime_enable(&pdev->dev);
+-	if (ret)
+-		return ret;
+-
+-	ret = pm_runtime_resume_and_get(&pdev->dev);
+-	if (ret)
+-		return ret;
+-
+-	regmap = qcom_cc_map(pdev, &cam_cc_sm8350_desc);
+-	if (IS_ERR(regmap)) {
+-		pm_runtime_put(&pdev->dev);
+-		return PTR_ERR(regmap);
+-	}
+-
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll0, regmap, &cam_cc_pll0_config);
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll1, regmap, &cam_cc_pll1_config);
+-	clk_zonda_pll_configure(&cam_cc_pll2, regmap, &cam_cc_pll2_config_sm8350_v2);
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll3, regmap, &cam_cc_pll3_config);
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll4, regmap, &cam_cc_pll4_config);
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll5, regmap, &cam_cc_pll5_config);
+-	clk_lucid_5lpe_pll_configure(&cam_cc_pll6, regmap, &cam_cc_pll6_config);
+-
+-	/* Keep cam_cc_gdsc_clk always enabled */
+-	regmap_update_bits(regmap, 0xc148, BIT(0), BIT(0));
+-
+-	ret = qcom_cc_really_probe(&pdev->dev, &cam_cc_sm8350_desc, regmap);
+-	pm_runtime_put(&pdev->dev);
+-
+-	return ret;
++	return qcom_cc_probe(pdev, &cam_cc_sm8350_desc);
+ }
+ 
+ static struct platform_driver cam_cc_sm8350_driver = {

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Bind the USB gadget set up by the initramfs to a controller that appeared
+# after the initramfs stopped waiting for it (udev: SUBSYSTEM=="udc").
+G=/sys/kernel/config/usb_gadget/g1
+[ -d $G ] || mount -t configfs configfs /sys/kernel/config 2>/dev/null
+[ -f $G/UDC ] || exit 0
+[ -n "$(cat $G/UDC)" ] && exit 0
+echo "$1" > $G/UDC

@@ -1,0 +1,18 @@
+#!/bin/sh
+# The PMIC RTC keeps counting but is read-only, so keep (system - RTC) in a
+# file: "save" when the clock is right, "restore" early at boot.
+F=/var/lib/rtc-offset
+RTC=/sys/class/rtc/rtc0/since_epoch
+[ -r $RTC ] || exit 0
+case "$1" in
+save)
+	now=$(date +%s)
+	# only trust a clock that is past this code being written
+	[ "$now" -gt 1790000000 ] || exit 0
+	echo $((now - $(cat $RTC))) > $F.tmp && mv $F.tmp $F
+	;;
+restore)
+	[ -r $F ] || exit 0
+	date -s @$(( $(cat $RTC) + $(cat $F) )) >/dev/null
+	;;
+esac

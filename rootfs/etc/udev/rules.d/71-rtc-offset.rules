@@ -1,0 +1,2 @@
+# the PMIC RTC is read-only and its driver is a module: apply the saved offset when it arrives
+ACTION=="add", SUBSYSTEM=="rtc", KERNEL=="rtc0", RUN+="/usr/local/bin/rtc-offset restore"

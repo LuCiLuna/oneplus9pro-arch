@@ -1,0 +1,118 @@
+From 9d4a389a5caa38454b526972b09839a8d8b72e64 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 08:49:01 +0000
+Subject: [PATCH 095/110] drm/msm/dsi: phy: 7nm: don't start the PLL before the
+ PHY is enabled
+
+At probe, msm_mdss resets the whole MDSS (including the DSI PHY), then
+the DSI PHY registers its clocks. The display clock controller's pixel
+clock has CLK_OPS_PARENT_ENABLE, so reparenting it onto the freshly
+registered PLL prepares the PLL right away, on a PHY that is unpowered
+and has no bias. The lock poll times out ("DSI PLL(0) lock failed"),
+the failed prepare is not reported back through clk_set_parent, and the
+following unprepare trips "already disabled" / "already unprepared"
+warnings.
+
+Track whether the PHY has been enabled and make PLL prepare/unprepare a
+no-op until then; the real start happens on the first enable after
+msm_dsi_phy_enable().
+
+This replaces the earlier "adopt a PLL left running by the bootloader"
+change, which was based on a wrong reading: the PLL is off at that point
+because of the MDSS reset.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/msm/dsi/phy/dsi_phy.c     |  3 +++
+ drivers/gpu/drm/msm/dsi/phy/dsi_phy.h     |  2 ++
+ drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c | 21 +++++++++++----------
+ 3 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
+index 1fb3899b88b..fd816c8d596 100644
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
+@@ -765,6 +765,7 @@ int msm_dsi_phy_enable(struct msm_dsi_phy *phy,
+ 		DRM_DEV_ERROR(dev, "%s: phy enable failed, %d\n", __func__, ret);
+ 		goto phy_en_fail;
+ 	}
++	phy->enabled = true;
+ 
+ 	memcpy(shared_timings, &phy->timing.shared_timings,
+ 	       sizeof(*shared_timings));
+@@ -787,6 +788,7 @@ int msm_dsi_phy_enable(struct msm_dsi_phy *phy,
+ 	return 0;
+ 
+ pll_restor_fail:
++	phy->enabled = false;
+ 	if (phy->cfg->ops.disable)
+ 		phy->cfg->ops.disable(phy);
+ phy_en_fail:
+@@ -802,6 +804,7 @@ void msm_dsi_phy_disable(struct msm_dsi_phy *phy)
+ 	if (!phy || !phy->cfg->ops.disable)
+ 		return;
+ 
++	phy->enabled = false;
+ 	phy->cfg->ops.disable(phy);
+ 
+ 	regulator_bulk_disable(phy->cfg->num_regulators, phy->supplies);
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
+index f5d3e806f8f..e3124e06193 100644
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
+@@ -119,6 +119,8 @@ struct msm_dsi_phy {
+ 
+ 	struct clk_hw *vco_hw;
+ 	bool pll_on;
++	/* Powered up by msm_dsi_phy_enable() */
++	bool enabled;
+ 
+ 	struct clk_hw_onecell_data *provided_clocks;
+ 
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
+index a66e172da22..83903f6a08b 100644
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
+@@ -491,24 +491,21 @@ static void dsi_pll_phy_dig_reset(struct dsi_pll_7nm *pll)
+ 	wmb(); /* Ensure that the reset is deasserted */
+ }
+ 
+-static int dsi_phy_hw_v4_0_is_pll_on(struct msm_dsi_phy *phy);
+-
+ static int dsi_pll_7nm_vco_prepare(struct clk_hw *hw)
+ {
+ 	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
+ 	int rc;
+ 
+ 	/*
+-	 * The bootloader may have left the PLL running a splash screen. Adopt
+-	 * it as is: restarting it or resetting the PHY digital block under a
+-	 * running command mode panel corrupts the link and the panel shuts
+-	 * itself off.
++	 * The clock framework can prepare the PLL before the PHY is powered,
++	 * e.g. when the display clock controller reparents its orphan
++	 * clocks (CLK_OPS_PARENT_ENABLE) as soon as the PHY registers its
++	 * clocks, right after the MDSS reset wiped the PHY. Starting the PLL
++	 * then can only time out; the real start happens once the PHY has
++	 * been enabled.
+ 	 */
+-	if (!pll_7nm->slave && dsi_phy_hw_v4_0_is_pll_on(pll_7nm->phy) &&
+-	    (readl(pll_7nm->phy->pll_base + REG_DSI_7nm_PHY_PLL_COMMON_STATUS_ONE) & BIT(0))) {
+-		pll_7nm->phy->pll_on = true;
++	if (!pll_7nm->phy->enabled)
+ 		return 0;
+-	}
+ 
+ 	dsi_pll_enable_pll_bias(pll_7nm);
+ 	if (pll_7nm->slave)
+@@ -563,6 +560,10 @@ static void dsi_pll_7nm_vco_unprepare(struct clk_hw *hw)
+ {
+ 	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
+ 
++	/* Nothing was started by dsi_pll_7nm_vco_prepare() */
++	if (!pll_7nm->phy->enabled && !pll_7nm->phy->pll_on)
++		return;
++
+ 	/*
+ 	 * To avoid any stray glitches while abruptly powering down the PLL
+ 	 * make sure to gate the clock using the clock enable bit before

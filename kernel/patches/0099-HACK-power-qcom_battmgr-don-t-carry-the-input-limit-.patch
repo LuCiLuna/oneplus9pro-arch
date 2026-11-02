@@ -1,0 +1,88 @@
+From 4afecb33b75257e10da962e11c0af022bb01e466 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 04:52:06 -0600
+Subject: [PATCH 099/110] HACK: power: qcom_battmgr: don't carry the input
+ limit between chargers
+
+The firmware keeps USB_INPUT_CURR_LIMIT across a detach, so what follows a
+PD charger at 2 A was allowed 2 A too, whether a USB port or a Type-C
+source with a smaller Rp. Go back to 500 mA on detach, keep to that for
+SDP and unknown types, and limit Type-C sources to what they advertise.
+
+The firmware reports Apple chargers as 9, which is now PD_SPR_AVS in the
+kernel's enum: translate it, as sysfs warned on every read, and charge from
+them like a DCP as the vendor driver does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/power/supply/qcom_battmgr.c | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index dee91231b6e..2f1bde1b283 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -58,6 +58,7 @@ enum qcom_battmgr_variant {
+ #define OPLUS_USB_OTG_AP_ENABLE		22
+ #define OPLUS_USB_OTG_SWITCH		23
+ #define OPLUS_USB_SET_PDO		16
++#define OPLUS_USB_TYPE_BRICK_ID		9
+ 
+ #define BATTMGR_BAT_INFO		0x9
+ 
+@@ -1604,8 +1605,13 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 			battmgr->usb.current_limit = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case USB_TYPE:
++			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
++			break;
+ 		case USB_ADAP_TYPE:
+ 			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
++			/* this firmware's enum predates the kernel's SPR AVS types */
++			if (battmgr->usb.usb_type == OPLUS_USB_TYPE_BRICK_ID)
++				battmgr->usb.usb_type = POWER_SUPPLY_USB_TYPE_APPLE_BRICK_ID;
+ 			break;
+ 		default:
+ 			dev_warn(battmgr->dev, "unknown property %#x\n", property);
+@@ -1772,6 +1778,7 @@ static const struct {
+ #define CHG_FCC_5V		1100000
+ #define CHG_ICL_9V		2000000
+ #define CHG_ICL_CDP		1500000
++#define CHG_ICL_DEFAULT		500000
+ #define CHG_VBUS_MIN		4400000
+ #define CHG_VBUS_HV		8000000
+ #define CHG_ITERM		150000
+@@ -1928,10 +1935,18 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 		if (ret)
+ 			goto out;
+ 		icl = cmax ? min(cmax, CHG_ICL_9V) : CHG_ICL_9V;
+-	} else if (type == POWER_SUPPLY_USB_TYPE_DCP || pd) {
++	} else if (type == POWER_SUPPLY_USB_TYPE_DCP || type == OPLUS_USB_TYPE_BRICK_ID || pd) {
+ 		qcom_battmgr_chg_climb_icl(battmgr, vbus, CHG_ICL_9V, &icl, &climbing);
+ 	} else if (type == POWER_SUPPLY_USB_TYPE_CDP) {
+ 		qcom_battmgr_chg_climb_icl(battmgr, vbus, CHG_ICL_CDP, &icl, &climbing);
++	} else if (type == POWER_SUPPLY_USB_TYPE_C) {
++		/* the current advertised by the source's Rp */
++		ret = qcom_battmgr_chg_get(battmgr, USB_CURR_MAX, &cmax);
++		if (ret)
++			goto out;
++		qcom_battmgr_chg_climb_icl(battmgr, vbus, min(cmax, CHG_ICL_9V), &icl, &climbing);
++	} else {
++		icl = CHG_ICL_DEFAULT;
+ 	}
+ 
+ 	if (icl && icl != battmgr->chg.icl) {
+@@ -2006,8 +2021,12 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 	return;
+ 
+ reset:
+-	if (battmgr->chg.online)
++	if (battmgr->chg.online) {
++		/* the firmware keeps this across a detach, whatever gets attached next */
++		qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
++					      USB_INPUT_CURR_LIMIT, CHG_ICL_DEFAULT);
+ 		pm_relax(battmgr->dev);
++	}
+ 	memset(&battmgr->chg, 0, sizeof(battmgr->chg));
+ 	mutex_unlock(&battmgr->lock);
+ 	/* could already be a new attach, whose notifications raced with this */

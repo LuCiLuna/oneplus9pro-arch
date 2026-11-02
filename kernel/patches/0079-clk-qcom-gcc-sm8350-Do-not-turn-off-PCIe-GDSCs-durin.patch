@@ -1,0 +1,47 @@
+From 6550a3c9fd1a41fd230d253cfdf6e4220b223e14 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 03:21:02 +0000
+Subject: [PATCH 079/110] clk: qcom: gcc-sm8350: Do not turn off PCIe GDSCs
+ during gdsc_disable()
+
+With PWRSTS_OFF_ON, PCIe GDSCs are turned off during gdsc_disable(). On
+system suspend genpd then powers pcie_0_gdsc off, and on resume it never
+comes back ("pcie_0_gdsc status stuck at 'off'" from genpd_resume_noirq),
+after which the first access to the controller resets the SoC.
+
+Use PWRSTS_RET_ON like SM8250, SM8450 and SM8550 already do, so the
+hardware moves the GDSCs to retention when the parent domain goes to a
+low power state.
+
+Tested on a OnePlus 9 Pro (WCN6855 class Wi-Fi on PCIe0): repeated
+s2idle cycles now resume with the link back and Wi-Fi reconnected.
+
+Fixes: 3fade948fbb3 ("clk: qcom: gcc-sm8350: add gdsc")
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/clk/qcom/gcc-sm8350.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/qcom/gcc-sm8350.c b/drivers/clk/qcom/gcc-sm8350.c
+index 2d94f3046b7..35f8d2d6b9a 100644
+--- a/drivers/clk/qcom/gcc-sm8350.c
++++ b/drivers/clk/qcom/gcc-sm8350.c
+@@ -3421,7 +3421,7 @@ static struct gdsc pcie_0_gdsc = {
+ 	.pd = {
+ 		.name = "pcie_0_gdsc",
+ 	},
+-	.pwrsts = PWRSTS_OFF_ON,
++	.pwrsts = PWRSTS_RET_ON,
+ };
+ 
+ static struct gdsc pcie_1_gdsc = {
+@@ -3429,7 +3429,7 @@ static struct gdsc pcie_1_gdsc = {
+ 	.pd = {
+ 		.name = "pcie_1_gdsc",
+ 	},
+-	.pwrsts = PWRSTS_OFF_ON,
++	.pwrsts = PWRSTS_RET_ON,
+ };
+ 
+ static struct gdsc ufs_card_gdsc = {

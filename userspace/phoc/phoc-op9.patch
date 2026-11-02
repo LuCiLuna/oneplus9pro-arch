@@ -1,0 +1,228 @@
+From 10a895c623cf1dc59950b6e5a423a54ade9ea888 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 06:38:54 +0000
+Subject: [PATCH 1/2] layer-surface: don't stall layout transactions on
+ reverted configures
+
+When an output is rotated back before the layer surfaces drew the first
+rotation (e.g. portrait -> landscape -> portrait within ~100ms), GTK
+clients end up at their already committed size and have nothing to
+redraw, so they don't commit for a long time. The layout transaction then
+waits for the full 3s timeout with the output shield raised (black
+screen), and the late commits trip the pending_layer_configures > 0
+assertion.
+
+Don't wait for surfaces whose committed size already matches the
+configure, release a pending configure when a surface unmaps or goes
+away, and track the transaction generation so serials left over from a
+timed out transaction aren't counted against a newer one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/layer-surface.c      | 52 ++++++++++++++++++++++++++++++++++++----
+ src/layer-surface.h      |  1 +
+ src/layout-transaction.c | 20 ++++++++++++++++
+ src/layout-transaction.h |  1 +
+ 4 files changed, 69 insertions(+), 5 deletions(-)
+
+diff --git a/src/layer-surface.c b/src/layer-surface.c
+index 1fb6678..7e5a417 100644
+--- a/src/layer-surface.c
++++ b/src/layer-surface.c
+@@ -55,6 +55,23 @@ G_DEFINE_TYPE_WITH_CODE (PhocLayerSurface, phoc_layer_surface, G_TYPE_OBJECT,
+ 
+ static void phoc_layer_surface_apply_damage (PhocLayerSurface *self);
+ 
++
++/* Stop waiting for the client to commit its pending configure */
++static void
++phoc_layer_surface_drop_pending_configure (PhocLayerSurface *self)
++{
++  PhocLayoutTransaction *transaction = phoc_layout_transaction_get_default ();
++
++  if (!self->pending_serial)
++    return;
++
++  self->pending_serial = 0;
++  /* The transaction we're part of might have timed out already */
++  if (phoc_layout_transaction_is_active (transaction) &&
++      phoc_layout_transaction_get_generation (transaction) == self->transaction_generation)
++    phoc_layout_transaction_notify_layer_configured (transaction);
++}
++
+ static void
+ phoc_layer_surface_child_root_get_box (PhocChildRoot *root, struct wlr_box *box)
+ {
+@@ -278,8 +295,7 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+   if (self->pending_serial &&
+       self->layer_surface->current.configure_serial >= self->pending_serial) {
+     g_debug ("layer-surface ack'ed serial %d", self->layer_surface->current.configure_serial);
+-    phoc_layout_transaction_notify_layer_configured (phoc_layout_transaction_get_default ());
+-    self->pending_serial = 0;
++    phoc_layer_surface_drop_pending_configure (self);
+   }
+ }
+ 
+@@ -373,6 +389,8 @@ handle_unmap (struct wl_listener *listener, void *data)
+   PhocOutput *output = phoc_layer_surface_get_output (self);
+ 
+   self->mapped = false;
++  /* Unmapped surfaces don't commit buffers */
++  phoc_layer_surface_drop_pending_configure (self);
+ 
+   wl_list_remove (&self->new_subsurface.link);
+   phoc_layer_surface_drop_child_surfaces (self);
+@@ -487,6 +505,7 @@ phoc_layer_surface_finalize (GObject *object)
+ 
+   g_assert (!self->layer_surface->surface->mapped);
+ 
++  phoc_layer_surface_drop_pending_configure (self);
+   wl_list_remove (&self->link);
+   if (output)
+     phoc_output_set_layer_dirty (output, self->layer);
+@@ -711,12 +730,12 @@ phoc_layer_surface_covers_output (PhocLayerSurface *self)
+ void
+ phoc_layer_surface_send_configure (PhocLayerSurface *self)
+ {
++  PhocLayoutTransaction *transaction = phoc_layout_transaction_get_default ();
++  struct wlr_layer_surface_v1_state *current;
+   guint32 pending_serial;
+   g_assert (PHOC_IS_LAYER_SURFACE (self));
+ 
+-  /* We're not part of a transaction yet but need to */
+-  if (!self->pending_serial)
+-    phoc_layout_transaction_add_layer_dirty (phoc_layout_transaction_get_default ());
++  current = &self->layer_surface->current;
+ 
+   pending_serial = wlr_layer_surface_v1_configure (self->layer_surface,
+                                                    self->geo.width,
+@@ -725,6 +744,29 @@ phoc_layer_surface_send_configure (PhocLayerSurface *self)
+            self,
+            self->pending_serial,
+            pending_serial);
++
++  /* The committed buffer already has the configured size, e.g. when a
++   * configure got reverted (quick rotation back and forth) before the
++   * client drew it. Clients like GTK then have nothing to redraw and
++   * might not commit for a long time, so don't wait for them. */
++  if (self->layer_surface->surface->mapped &&
++      current->actual_width == self->geo.width &&
++      current->actual_height == self->geo.height) {
++    g_debug ("Layersurface %p: already at %dx%d, not waiting for commit",
++             self, self->geo.width, self->geo.height);
++    phoc_layer_surface_drop_pending_configure (self);
++    return;
++  }
++
++  /* We're not part of a transaction yet but need to. A pending serial
++   * from a transaction that timed out doesn't count. */
++  if (!self->pending_serial ||
++      !phoc_layout_transaction_is_active (transaction) ||
++      phoc_layout_transaction_get_generation (transaction) != self->transaction_generation) {
++    phoc_layout_transaction_add_layer_dirty (transaction);
++    self->transaction_generation = phoc_layout_transaction_get_generation (transaction);
++  }
++
+   self->pending_serial = pending_serial;
+ }
+ 
+diff --git a/src/layer-surface.h b/src/layer-surface.h
+index 1cb2c48..363cdff 100644
+--- a/src/layer-surface.h
++++ b/src/layer-surface.h
+@@ -43,6 +43,7 @@ struct _PhocLayerSurface {
+   GSList            *child_surfaces;
+   /* Last not yet ACKed serial */
+   uint32_t           pending_serial;
++  guint              transaction_generation;
+ };
+ 
+ PhocLayerSurface *phoc_layer_surface_new (struct wlr_layer_surface_v1 *layer_surface);
+diff --git a/src/layout-transaction.c b/src/layout-transaction.c
+index 2beea27..e9abcca 100644
+--- a/src/layout-transaction.c
++++ b/src/layout-transaction.c
+@@ -34,6 +34,7 @@ struct _PhocLayoutTransaction {
+   gint64                starttime;
+   guint                 pending_layer_configures;
+   guint                 layer_timer_id;
++  guint                 generation;
+ };
+ G_DEFINE_TYPE (PhocLayoutTransaction, phoc_layout_transaction, G_TYPE_OBJECT)
+ 
+@@ -182,6 +183,7 @@ phoc_layout_transaction_add_layer_dirty (PhocLayoutTransaction *self)
+   }
+ 
+   /* Outstanding configures. Transaction started */
++  self->generation++;
+   g_debug ("Starting new layout transaction");
+   self->starttime = g_get_monotonic_time ();
+   self->layer_timer_id = g_timeout_add_once (TIMEOUT_LAYER_MS, on_timeout_expired, self);
+@@ -221,3 +223,21 @@ phoc_layout_transaction_notify_layer_configured (PhocLayoutTransaction *self)
+ 
+   apply_transaction (self);
+ }
++
++/**
++ * phoc_layout_transaction_get_generation:
++ * @self: The transaction
++ *
++ * Get a number identifying the current (or last) transaction. Layer
++ * surfaces use it to tell whether the transaction they joined is
++ * still the active one.
++ *
++ * Returns: The transaction's generation
++ */
++guint
++phoc_layout_transaction_get_generation (PhocLayoutTransaction *self)
++{
++  g_assert (PHOC_IS_LAYOUT_TRANSACTION (self));
++
++  return self->generation;
++}
+diff --git a/src/layout-transaction.h b/src/layout-transaction.h
+index ba63942..9370c4a 100644
+--- a/src/layout-transaction.h
++++ b/src/layout-transaction.h
+@@ -20,5 +20,6 @@ PhocLayoutTransaction *
+ gboolean          phoc_layout_transaction_is_active (PhocLayoutTransaction *self);
+ void              phoc_layout_transaction_notify_layer_configured (PhocLayoutTransaction *self);
+ void              phoc_layout_transaction_add_layer_dirty (PhocLayoutTransaction *self);
++guint             phoc_layout_transaction_get_generation (PhocLayoutTransaction *self);
+ 
+ G_END_DECLS
+-- 
+2.56.0
+
+
+From 6e88bd09d5c111d42d4199084c8d382d6ad84f93 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 10:29:28 +0000
+Subject: [PATCH 2/2] output: honour non-preferred modes from
+ wlr-output-management
+
+phoc_output_config_head_to_output_config() only took the mode a client
+picked if that mode was the preferred one, and read the unset custom mode
+otherwise, so selecting any other mode did nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/output.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/output.c b/src/output.c
+index d95d6db..705dcc1 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -1943,7 +1943,7 @@ phoc_output_config_head_to_output_config (PhocOutput
+   PhocOutputConfig *oc = phoc_output_config_new (phoc_output_get_identifier (self));
+ 
+   oc->enable = TRUE;
+-  if (head->state.mode && head->state.mode->preferred) {
++  if (head->state.mode) {
+     oc->mode.width = head->state.mode->width;
+     oc->mode.height = head->state.mode->height;
+     oc->mode.refresh_rate = head->state.mode->refresh / 1000.0;
+-- 
+2.56.0
+

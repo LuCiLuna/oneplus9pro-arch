@@ -1,0 +1,152 @@
+From f77d41efa409e013c43c332fa2209b61c31e949d Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:09:14 +0000
+Subject: [PATCH 029/110] arm64: dts: qcom: sm8350-oneplus-lemonadep: add
+ speakers
+
+Two TFA9874 amplifiers on i2c19 (top/earpiece at 0x34, bottom at 0x35)
+fed by tertiary MI2S SD1, with a q6asm/q6afe sound card.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 112 ++++++++++++++++++
+ 1 file changed, 112 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 1c333b9037e..90e8fbf85df 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -31,6 +31,53 @@ memory@80000000 {
+ 		      <0x2 0x00000000 0x1 0x80000000>,
+ 		      <0x0 0xc0000000 0x1 0x40000000>;
+ 	};
++
++	sound {
++		compatible = "qcom,sm8250-sndcard";
++		model = "OnePlus 9 Pro";
++		pinctrl-0 = <&tert_mi2s_active>;
++		pinctrl-names = "default";
++
++		mm1-dai-link {
++			link-name = "MultiMedia1";
++
++			cpu {
++				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
++			};
++		};
++
++		mm2-dai-link {
++			link-name = "MultiMedia2";
++
++			cpu {
++				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
++			};
++		};
++
++		mm3-dai-link {
++			link-name = "MultiMedia3";
++
++			cpu {
++				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA3>;
++			};
++		};
++
++		speaker-dai-link {
++			link-name = "Speaker Playback";
++
++			cpu {
++				sound-dai = <&q6afedai TERTIARY_MI2S_RX>;
++			};
++
++			platform {
++				sound-dai = <&q6routing>;
++			};
++
++			codec {
++				sound-dai = <&speaker_top>, <&speaker_bottom>;
++			};
++		};
++	};
+ };
+ 
+ &display_panel {
+@@ -56,6 +103,33 @@ touchscreen@4b {
+ 	};
+ };
+ 
++&i2c19 {
++	clock-frequency = <400000>;
++	status = "okay";
++
++	/* Earpiece/top speaker, plays the left I2S slot */
++	speaker_top: audio-codec@34 {
++		compatible = "nxp,tfa9874";
++		reg = <0x34>;
++		reset-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
++		vdd-supply = <&pm8350_s10>;
++		nxp,tdm-slot = <0>;
++		sound-name-prefix = "Top";
++		#sound-dai-cells = <0>;
++	};
++
++	/* Bottom speaker, plays the right I2S slot */
++	speaker_bottom: audio-codec@35 {
++		compatible = "nxp,tfa9874";
++		reg = <0x35>;
++		reset-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
++		vdd-supply = <&pm8350_s10>;
++		nxp,tdm-slot = <1>;
++		sound-name-prefix = "Bottom";
++		#sound-dai-cells = <0>;
++	};
++};
++
+ &mdss {
+ 	status = "okay";
+ };
+@@ -89,7 +163,45 @@ &mpss {
+ 	status = "okay";
+ };
+ 
++/* Speaker amplifiers: tertiary MI2S, SD1 out to the amps, SD0 feedback in */
++&q6afedai {
++	dai@20 {
++		reg = <TERTIARY_MI2S_RX>;
++		qcom,sd-lines = <1>;
++	};
++};
++
+ &tlmm {
++	tert_mi2s_active: tert-mi2s-active-state {
++		sck-pins {
++			pins = "gpio120";
++			function = "mi2s2_sck";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		data0-pins {
++			pins = "gpio121";
++			function = "mi2s2_data0";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		ws-pins {
++			pins = "gpio122";
++			function = "mi2s2_ws";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		data1-pins {
++			pins = "gpio124";
++			function = "mi2s2_data1";
++			drive-strength = <8>;
++			bias-disable;
++		};
++	};
++
+ 	tp_enable_2v8: tp-2v8-enable-state {
+ 		pins = "gpio31", "gpio197";
+ 		function = "gpio";

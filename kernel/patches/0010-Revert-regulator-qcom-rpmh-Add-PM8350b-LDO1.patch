@@ -1,0 +1,26 @@
+From 72208a95f5c05ac68223a9c468e9b8934e91627e Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 07:19:44 +0000
+Subject: [PATCH 010/110] Revert "regulator: qcom-rpmh: Add PM8350b LDO1"
+
+This reverts commit f087d78a1595286dac122baa90e131088c4ce707.
+---
+ drivers/regulator/qcom-rpmh-regulator.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/drivers/regulator/qcom-rpmh-regulator.c b/drivers/regulator/qcom-rpmh-regulator.c
+index e4674228ac5..25c14de3cd8 100644
+--- a/drivers/regulator/qcom-rpmh-regulator.c
++++ b/drivers/regulator/qcom-rpmh-regulator.c
+@@ -1392,11 +1392,6 @@ static const struct rpmh_vreg_init_data pm8350b_vreg_data[] = {
+ 	{}
+ };
+ 
+-static const struct rpmh_vreg_init_data pm8350b_vreg_data[] = {
+-	RPMH_VREG("ldo1", "ldo%s1", &pmic5_nldo, "vdd-l1"),
+-	{}
+-};
+-
+ static const struct rpmh_vreg_init_data pm8350c_vreg_data[] = {
+ 	RPMH_VREG("smps1",  SMPS, 1,  &pmic5_hfsmps515, "vdd-s1"),
+ 	RPMH_VREG("smps2",  SMPS, 2,  &pmic5_ftsmps510, "vdd-s2"),

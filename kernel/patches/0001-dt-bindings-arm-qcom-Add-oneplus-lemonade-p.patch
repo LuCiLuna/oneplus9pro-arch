@@ -1,0 +1,26 @@
+From fd93af64d3a29ab9be92d1afc46650816b5ca705 Mon Sep 17 00:00:00 2001
+From: Nia Espera <nespera@igalia.com>
+Date: Wed, 18 Oct 2023 16:12:41 +0200
+Subject: [PATCH 001/110] dt-bindings: arm: qcom: Add oneplus-lemonade(p)
+
+Document the devicetree bindings for oneplus-lemonade and oneplus-lemonadep.
+
+Signed-off-by: Nia Espera <nespera@igalia.com>
+Acked-by: Krzysztof Kozlowski <krzysztof.kozlowski@linaro.org>
+---
+ Documentation/devicetree/bindings/arm/qcom.yaml | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
+index ff8a35df786..375da1266ce 100644
+--- a/Documentation/devicetree/bindings/arm/qcom.yaml
++++ b/Documentation/devicetree/bindings/arm/qcom.yaml
+@@ -1114,6 +1114,8 @@ properties:
+       - items:
+           - enum:
+               - microsoft,surface-duo2
++              - oneplus,lemonade
++              - oneplus,lemonadep
+               - qcom,sm8350-hdk
+               - qcom,sm8350-mtp
+               - sony,pdx214-generic

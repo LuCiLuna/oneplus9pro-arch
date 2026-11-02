@@ -1,0 +1,43 @@
+From 996dd46caf650be21838c0d0f36206706d85e339 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:49:09 +0000
+Subject: [PATCH 036/110] media: i2c: imx471: add OF match and vio/vdig
+ supplies
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/imx471.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/media/i2c/imx471.c b/drivers/media/i2c/imx471.c
+index 4053aed8434..1e05db6a70d 100644
+--- a/drivers/media/i2c/imx471.c
++++ b/drivers/media/i2c/imx471.c
+@@ -117,7 +117,9 @@
+ #define to_imx471(_sd) container_of_const(_sd, struct imx471, sd)
+ 
+ static const char * const imx471_supply_name[] = {
++	"vio",
+ 	"vana",
++	"vdig",
+ };
+ 
+ struct imx471_mode {
+@@ -939,10 +941,17 @@ static const struct acpi_device_id imx471_acpi_ids[] __maybe_unused = {
+ };
+ MODULE_DEVICE_TABLE(acpi, imx471_acpi_ids);
+ 
++static const struct of_device_id imx471_of_match[] = {
++	{ .compatible = "sony,imx471" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx471_of_match);
++
+ static struct i2c_driver imx471_i2c_driver = {
+ 	.driver = {
+ 		.name = "imx471",
+ 		.acpi_match_table = ACPI_PTR(imx471_acpi_ids),
++		.of_match_table = imx471_of_match,
+ 		.pm = pm_sleep_ptr(&imx471_pm_ops),
+ 	},
+ 	.probe = imx471_probe,

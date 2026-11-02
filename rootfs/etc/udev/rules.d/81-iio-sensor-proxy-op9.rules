@@ -1,0 +1,4 @@
+# OnePlus 9 Pro: accelerometer and proximity also come from the SLPI (libssc)
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"
+# the SLPI reports X and Y turned 180 degrees from the panel (firmware matrix is all 0)
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, 1"

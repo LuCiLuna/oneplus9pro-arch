@@ -1,0 +1,37 @@
+From 6f2fa0e2d7a02a8d66baa248a4806430d2b9c6fe Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 03:21:03 +0000
+Subject: [PATCH 080/110] WIP: wifi: ath11k: let QCA6490 v1 suspend again
+
+The SoC resets seen on suspend were the SM8350 PCIe GDSC failing to come
+back, not the v1 firmware. With that fixed the default (power cycle)
+suspend path works, so drop the op9_fw_suspend knob.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/wireless/ath/ath11k/core.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath11k/core.c b/drivers/net/wireless/ath/ath11k/core.c
+index e535a984b03..be9fe5c2ad7 100644
+--- a/drivers/net/wireless/ath/ath11k/core.c
++++ b/drivers/net/wireless/ath/ath11k/core.c
+@@ -2607,9 +2607,6 @@ static void ath11k_core_reset(struct work_struct *work)
+ 	ath11k_dbg(ab, ATH11K_DBG_BOOT, "reset started\n");
+ }
+ 
+-static bool op9_fw_suspend;
+-module_param(op9_fw_suspend, bool, 0444);
+-
+ static int ath11k_init_hw_params(struct ath11k_base *ab)
+ {
+ 	const struct ath11k_hw_params *hw_params = NULL;
+@@ -2638,8 +2635,6 @@ static int ath11k_init_hw_params(struct ath11k_base *ab)
+ 		ab->hw_params.regs = &wcn6855_regs;
+ 		ab->hw_params.fix_l1ss = false;
+ 		ab->hw_params.cfr_support = false;
+-		/* suspending through the v1 firmware hangs the SoC */
+-		ab->hw_params.supports_suspend = op9_fw_suspend;
+ 		/* the v1 firmware runs out of RAM on 17 vdevs; the vendor driver asks for 4 */
+ 		ab->hw_params.num_vdevs = 4;
+ 		ath11k_info(ab, "QCA6490 v1: WCN6855 register map, v1 firmware limits\n");

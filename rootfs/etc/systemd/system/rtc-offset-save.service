@@ -1,0 +1,6 @@
+[Unit]
+Description=Save the PMIC RTC offset
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rtc-offset save

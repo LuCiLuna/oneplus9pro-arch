@@ -1,0 +1,293 @@
+From 76cb5edfc57d1abec712442da3ac6f459dc2d408 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:49:09 +0000
+Subject: [PATCH 038/110] WIP: arm64: dts: qcom: sm8350-oneplus: camera PMICs
+ and front IMX471
+
+PM8008i/j on i2c13, the GPIO-switched front VANA LDO and the IMX471 on
+CCI1 bus 1 at 0x10 (chip id verified). The sensor endpoint points at a
+temporary stand-in until CAMSS is described.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm8350-oneplus-common.dtsi  | 154 +++++++++++++++++-
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     |  80 +++++++++
+ 2 files changed, 233 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index d2a95636631..f22ccf14694 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -654,7 +654,145 @@ fsa4480_sbu_mux: endpoint {
+ 		};
+ 	};
+ 
+-	/* Qualcomm PM8008i/PM8008j @ 8, 9, c, d */
++	/*
++	 * Camera PMICs. The interrupt lines are not wired to the SoC (downstream
++	 * uses none either), so only the regulators are registered.
++	 */
++	pm8008i: pmic@8 {
++		compatible = "qcom,pm8008";
++		reg = <0x8>;
++
++		reset-gpios = <&tlmm 33 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&pm8008i_reset_n>;
++		pinctrl-names = "default";
++
++		vdd-l1-l2-supply = <&pm8350_s12>;
++		vdd-l3-l4-supply = <&vreg_bob>;
++		vdd-l5-supply = <&pm8350c_s1>;
++		vdd-l6-supply = <&vreg_bob>;
++		vdd-l7-supply = <&vreg_bob>;
++
++		gpio-controller;
++		#gpio-cells = <2>;
++		gpio-ranges = <&pm8008i 0 0 2>;
++
++		interrupt-controller;
++		#interrupt-cells = <2>;
++
++		#thermal-sensor-cells = <0>;
++
++		regulators {
++			vreg_l1i: ldo1 {
++				regulator-name = "pm8008i_l1";
++				regulator-min-microvolt = <1000000>;
++				regulator-max-microvolt = <1200000>;
++			};
++
++			vreg_l2i: ldo2 {
++				regulator-name = "pm8008i_l2";
++				regulator-min-microvolt = <944000>;
++				regulator-max-microvolt = <1152000>;
++			};
++
++			vreg_l3i: ldo3 {
++				regulator-name = "pm8008i_l3";
++				regulator-min-microvolt = <2696000>;
++				regulator-max-microvolt = <3000000>;
++			};
++
++			vreg_l4i: ldo4 {
++				regulator-name = "pm8008i_l4";
++				regulator-min-microvolt = <2696000>;
++				regulator-max-microvolt = <2904000>;
++			};
++
++			vreg_l5i: ldo5 {
++				regulator-name = "pm8008i_l5";
++				regulator-min-microvolt = <1700000>;
++				regulator-max-microvolt = <1800000>;
++			};
++
++			vreg_l6i: ldo6 {
++				regulator-name = "pm8008i_l6";
++				regulator-min-microvolt = <2696000>;
++				regulator-max-microvolt = <2904000>;
++			};
++
++			vreg_l7i: ldo7 {
++				regulator-name = "pm8008i_l7";
++				regulator-min-microvolt = <2696000>;
++				regulator-max-microvolt = <3000000>;
++			};
++		};
++	};
++
++	pm8008j: pmic@c {
++		compatible = "qcom,pm8008";
++		reg = <0xc>;
++
++		reset-gpios = <&tlmm 35 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&pm8008j_reset_n>;
++		pinctrl-names = "default";
++
++		vdd-l1-l2-supply = <&pm8350_s12>;
++		vdd-l3-l4-supply = <&pm8350c_s1>;
++		vdd-l5-supply = <&vreg_bob>;
++		vdd-l6-supply = <&vreg_bob>;
++		vdd-l7-supply = <&vreg_bob>;
++
++		gpio-controller;
++		#gpio-cells = <2>;
++		gpio-ranges = <&pm8008j 0 0 2>;
++
++		interrupt-controller;
++		#interrupt-cells = <2>;
++
++		#thermal-sensor-cells = <0>;
++
++		regulators {
++			vreg_l1j: ldo1 {
++				regulator-name = "pm8008j_l1";
++				regulator-min-microvolt = <944000>;
++				regulator-max-microvolt = <1152000>;
++			};
++
++			vreg_l2j: ldo2 {
++				regulator-name = "pm8008j_l2";
++				regulator-min-microvolt = <944000>;
++				regulator-max-microvolt = <1056000>;
++			};
++
++			vreg_l3j: ldo3 {
++				regulator-name = "pm8008j_l3";
++				regulator-min-microvolt = <1728000>;
++				regulator-max-microvolt = <1800000>;
++			};
++
++			vreg_l4j: ldo4 {
++				regulator-name = "pm8008j_l4";
++				regulator-min-microvolt = <1728000>;
++				regulator-max-microvolt = <1800000>;
++			};
++
++			vreg_l5j: ldo5 {
++				regulator-name = "pm8008j_l5";
++				regulator-min-microvolt = <2696000>;
++				regulator-max-microvolt = <2904000>;
++			};
++
++			vreg_l6j: ldo6 {
++				regulator-name = "pm8008j_l6";
++				regulator-min-microvolt = <2800000>;
++				regulator-max-microvolt = <2800000>;
++			};
++
++			vreg_l7j: ldo7 {
++				regulator-name = "pm8008j_l7";
++				regulator-min-microvolt = <2808000>;
++				regulator-max-microvolt = <3600000>;
++			};
++		};
++	};
+ };
+ 
+ &i2c15 {
+@@ -1136,6 +1274,20 @@ &tlmm {
+ 	/* Fingerprint sensor and NFC-related pins shouldn't be touched by us */
+ 	gpio-reserved-ranges = <52 8>;
+ 
++	pm8008i_reset_n: pm8008i-reset-n-state {
++		pins = "gpio33";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	pm8008j_reset_n: pm8008j-reset-n-state {
++		pins = "gpio35";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	bt_active: bt-active-state {
+ 		pins = "gpio65";
+ 		function = "gpio";
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 489e4a6c40f..b92726b7949 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -32,6 +32,19 @@ memory@80000000 {
+ 		      <0x0 0xc0000000 0x1 0x40000000>;
+ 	};
+ 
++	/* Front camera analog supply: LDO fed from BOB, enabled by GPIO 97 */
++	vreg_cam_front_vana: regulator-cam-front-vana {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_front_vana";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		gpio = <&tlmm 97 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&vreg_bob>;
++		pinctrl-0 = <&cam_front_vana_en>;
++		pinctrl-names = "default";
++	};
++
+ 	wcd938x: audio-codec {
+ 		compatible = "qcom,wcd9380-codec";
+ 
+@@ -195,6 +208,52 @@ touchscreen@4b {
+ 	};
+ };
+ 
++&camcc {
++	status = "okay";
++};
++
++&cci1 {
++	status = "okay";
++
++	/* TEMP: stand-in CSI receiver so the sensor probes before CAMSS exists */
++	port {
++		cam_test_ep: endpoint {
++			remote-endpoint = <&imx471_ep>;
++		};
++	};
++};
++
++&cci1_i2c1 {
++	/* Front camera, Truly IMX471 */
++	camera@10 {
++		compatible = "sony,imx471";
++		reg = <0x10>;
++
++		clocks = <&camcc CAM_CC_MCLK3_CLK>;
++		assigned-clocks = <&camcc CAM_CC_MCLK3_CLK>;
++		assigned-clock-rates = <19200000>;
++
++		reset-gpios = <&tlmm 115 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&cam_mclk3_active>, <&cam_front_reset>;
++		pinctrl-names = "default";
++
++		vio-supply = <&vreg_l5i>;
++		vana-supply = <&vreg_cam_front_vana>;
++		vdig-supply = <&vreg_l2i>;
++
++		rotation = <270>;
++		orientation = <0>;
++
++		port {
++			imx471_ep: endpoint {
++				data-lanes = <1 2 3 4>;
++				link-frequencies = /bits/ 64 <200000000>;
++				remote-endpoint = <&cam_test_ep>;	/* TEMP until CAMSS */
++			};
++		};
++	};
++};
++
+ &i2c19 {
+ 	clock-frequency = <400000>;
+ 	status = "okay";
+@@ -376,6 +435,27 @@ data1-pins {
+ 		};
+ 	};
+ 
++	cam_mclk3_active: cam-mclk3-active-state {
++		pins = "gpio103";
++		function = "cam_mclk";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_front_reset: cam-front-reset-state {
++		pins = "gpio115";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_front_vana_en: cam-front-vana-en-state {
++		pins = "gpio97";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	wcd_reset_n: wcd-reset-n-state {
+ 		pins = "gpio88";
+ 		function = "gpio";

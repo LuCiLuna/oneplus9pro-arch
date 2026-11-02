@@ -1,0 +1,68 @@
+From f83d990f3f88292be41306dc02aeaa2192553ebe Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:37:50 +0000
+Subject: [PATCH 030/110] clk: qcom: lpasscc-sc8280xp: add SM8350 LPASS audio
+ CSR resets
+
+SM8350 has the RX, TX and WSA SoundWire clock gate controls in the LPASS
+audio CSR block (0x32a9000 + 0xa0/0xa8/0xb0). SoundWire v1.6 needs them
+pulsed or every bus read underflows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/clk/qcom/lpasscc-sc8280xp.c              | 16 ++++++++++++++++
+ .../dt-bindings/clock/qcom,sm8350-lpassaudiocc.h | 11 +++++++++++
+ 2 files changed, 27 insertions(+)
+ create mode 100644 include/dt-bindings/clock/qcom,sm8350-lpassaudiocc.h
+
+diff --git a/drivers/clk/qcom/lpasscc-sc8280xp.c b/drivers/clk/qcom/lpasscc-sc8280xp.c
+index 32769281b22..075776861d1 100644
+--- a/drivers/clk/qcom/lpasscc-sc8280xp.c
++++ b/drivers/clk/qcom/lpasscc-sc8280xp.c
+@@ -36,6 +36,19 @@ static const struct qcom_cc_desc lpass_audiocc_sc8280xp_reset_desc = {
+ 	.num_resets = ARRAY_SIZE(lpass_audiocc_sc8280xp_resets),
+ };
+ 
++/* SM8350 keeps all SoundWire clock gates in the audio CSR block */
++static const struct qcom_reset_map lpass_audiocc_sm8350_resets[] = {
++	[0] = { 0xa0, 1 },	/* LPASS_AUDIO_SWR_RX_CGCR */
++	[1] = { 0xa8, 1 },	/* LPASS_AUDIO_SWR_TX_CGCR */
++	[2] = { 0xb0, 1 },	/* LPASS_AUDIO_SWR_WSA_CGCR */
++};
++
++static const struct qcom_cc_desc lpass_audiocc_sm8350_reset_desc = {
++	.config = &lpass_audiocc_sc8280xp_regmap_config,
++	.resets = lpass_audiocc_sm8350_resets,
++	.num_resets = ARRAY_SIZE(lpass_audiocc_sm8350_resets),
++};
++
+ static const struct qcom_reset_map lpasscc_sc8280xp_resets[] = {
+ 	[LPASS_AUDIO_SWR_TX_CGCR] = { 0xc010, 1 },
+ };
+@@ -61,6 +74,9 @@ static const struct of_device_id lpasscc_sc8280xp_match_table[] = {
+ 	}, {
+ 		.compatible = "qcom,sc8280xp-lpasscc",
+ 		.data = &lpasscc_sc8280xp_reset_desc,
++	}, {
++		.compatible = "qcom,sm8350-lpassaudiocc",
++		.data = &lpass_audiocc_sm8350_reset_desc,
+ 	},
+ 	{ }
+ };
+diff --git a/include/dt-bindings/clock/qcom,sm8350-lpassaudiocc.h b/include/dt-bindings/clock/qcom,sm8350-lpassaudiocc.h
+new file mode 100644
+index 00000000000..91aee3f1078
+--- /dev/null
++++ b/include/dt-bindings/clock/qcom,sm8350-lpassaudiocc.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
++
++#ifndef _DT_BINDINGS_CLK_QCOM_LPASSAUDIOCC_SM8350_H
++#define _DT_BINDINGS_CLK_QCOM_LPASSAUDIOCC_SM8350_H
++
++/* LPASS AUDIO CC CSR resets */
++#define LPASS_AUDIO_SWR_RX_CGCR		0
++#define LPASS_AUDIO_SWR_TX_CGCR		1
++#define LPASS_AUDIO_SWR_WSA_CGCR	2
++
++#endif

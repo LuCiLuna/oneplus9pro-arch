@@ -1,0 +1,75 @@
+From 0187501ead6c0a31b3d4a43b3a85cb40c6698cbb Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:06:57 +0000
+Subject: [PATCH 069/110] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep:
+ ultrawide focus motor
+
+LC898229 at 0x72 on CCI0 bus 1, VAF switched from BOB by GPIO 125.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 30 +++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index b9e7fcc5465..e5a5d1ff472 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -73,6 +73,19 @@ vreg_cam_mono_avdd: regulator-cam-mono-avdd {
+ 		pinctrl-names = "default";
+ 	};
+ 
++	/* Ultrawide camera focus motor supply, switched from BOB by GPIO 125 */
++	vreg_cam_wide_vaf: regulator-cam-wide-vaf {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_wide_vaf";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		gpio = <&tlmm 125 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&vreg_bob>;
++		pinctrl-0 = <&cam_wide_vaf_en>;
++		pinctrl-names = "default";
++	};
++
+ 	vreg_cam_main_avdd: regulator-cam-main-avdd {
+ 		compatible = "regulator-fixed";
+ 		regulator-name = "cam_main_avdd";
+@@ -428,6 +441,8 @@ camera@1a {
+ 		vana1-supply = <&vreg_l7i>;
+ 		vdig-supply = <&vreg_cam_wide_dvdd>;
+ 
++		lens-focus = <&wide_vcm>;
++
+ 		rotation = <90>;
+ 		orientation = <1>;
+ 
+@@ -470,6 +485,14 @@ gc02m1b_ep: endpoint {
+ 		};
+ 	};
+ 
++	/* Ultrawide camera focus motor, onsemi LC898229 */
++	wide_vcm: focus@72 {
++		compatible = "onnn,lc898229";
++		reg = <0x72>;
++		vdd-supply = <&vreg_cam_wide_vaf>;
++		vio-supply = <&vreg_l5i>;
++	};
++
+ 	/* Ultrawide camera module calibration */
+ 	eeprom@51 {
+ 		compatible = "atmel,24c128";
+@@ -842,6 +865,13 @@ cam_mono_avdd_en: cam-mono-avdd-en-state {
+ 		bias-disable;
+ 	};
+ 
++	cam_wide_vaf_en: cam-wide-vaf-en-state {
++		pins = "gpio125";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	cam_mclk3_active: cam-mclk3-active-state {
+ 		pins = "gpio103";
+ 		function = "cam_mclk";

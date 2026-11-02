@@ -1,0 +1,543 @@
+From b7caba0380a17469ab2cf400ae3274a93c49f53f Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 19:12:22 +0000
+Subject: [PATCH 058/110] media: i2c: imx789: add IMX766 support
+
+The IMX766 (50 MP, the OnePlus 9 Pro ultrawide) is programmed the same
+way as the IMX789 and also talks C-PHY over three trios. Move the
+per-sensor parts (ID, init table, modes, rates, array size) into chip
+data and add its 2x2 binned 4096x3072 30 fps mode. As with the IMX789,
+the stock init's H+V flip is left out. Name the subdev after the chip.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/Kconfig  |   6 +-
+ drivers/media/i2c/imx789.c | 349 +++++++++++++++++++++++++++++++++----
+ 2 files changed, 316 insertions(+), 39 deletions(-)
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index d851dfd3616..efe038849a7 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -300,12 +300,12 @@ config VIDEO_IMX471
+ 	  module will be called imx471.
+ 
+ config VIDEO_IMX789
+-	tristate "Sony IMX789 sensor support"
++	tristate "Sony IMX789 and IMX766 sensor support"
+ 	depends on GPIOLIB
+ 	select V4L2_CCI_I2C
+ 	help
+-	  This is a Video4Linux2 sensor driver for the Sony
+-	  IMX789 camera, a 48 MP sensor with a MIPI C-PHY interface.
++	  This is a Video4Linux2 sensor driver for the Sony IMX789
++	  (48 MP) and IMX766 (50 MP) cameras, which use MIPI C-PHY.
+ 
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called imx789.
+diff --git a/drivers/media/i2c/imx789.c b/drivers/media/i2c/imx789.c
+index 6d5e63309b0..1c68b934488 100644
+--- a/drivers/media/i2c/imx789.c
++++ b/drivers/media/i2c/imx789.c
+@@ -1,10 +1,10 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+- * Sony IMX789 image sensor driver
++ * Sony IMX789 / IMX766 image sensor driver
+  *
+  * Register settings come from the OnePlus 9 Pro camera module data
+- * (com.qti.sensormodule.lemonadep.semco_imx789.bin). The sensor talks
+- * MIPI C-PHY over three trios.
++ * (com.qti.sensormodule.lemonadep.{semco_imx789,sunny_imx766}.bin).
++ * Both sensors talk MIPI C-PHY over three trios.
+  */
+ 
+ #include <linux/clk.h>
+@@ -13,6 +13,7 @@
+ #include <linux/i2c.h>
+ #include <linux/module.h>
+ #include <linux/pm_runtime.h>
++#include <linux/property.h>
+ #include <linux/regulator/consumer.h>
+ #include <media/v4l2-cci.h>
+ #include <media/v4l2-ctrls.h>
+@@ -24,7 +25,6 @@
+ #define IMX789_MODE_STREAMING		0x01
+ 
+ #define IMX789_REG_CHIP_ID		CCI_REG16(0x0016)
+-#define IMX789_CHIP_ID			0x0789
+ 
+ #define IMX789_REG_FLL			CCI_REG16(0x0340)
+ #define IMX789_FLL_MAX			0xffff
+@@ -47,13 +47,6 @@
+ #define IMX789_REG_ORIENTATION		CCI_REG8(0x0101)
+ 
+ #define IMX789_EXT_CLK			19200000
+-/* C-PHY: 960 Msps per trio, reported as half the symbol rate */
+-#define IMX789_LINK_FREQ		480000000LL
+-/* VT PLL: 19.2 MHz / 3 * 174 / 5, eight pixels per clock */
+-#define IMX789_PIXEL_RATE		1781760000LL
+-
+-#define IMX789_NATIVE_WIDTH		8000
+-#define IMX789_NATIVE_HEIGHT		6016
+ 
+ static const char * const imx789_supply_names[] = {
+ 	"vio",
+@@ -72,8 +65,23 @@ struct imx789_mode {
+ 	unsigned int num_regs;
+ };
+ 
++struct imx789_chip {
++	const char *name;
++	u16 id;
++	const struct cci_reg_sequence *init_regs;
++	unsigned int num_init_regs;
++	const struct imx789_mode *modes;
++	unsigned int num_modes;
++	/* C-PHY: reported as half the symbol rate */
++	s64 link_freq;
++	u64 pixel_rate;
++	u32 native_width;
++	u32 native_height;
++};
++
+ struct imx789 {
+ 	struct device *dev;
++	const struct imx789_chip *chip;
+ 	struct regmap *regmap;
+ 	struct v4l2_subdev sd;
+ 	struct media_pad pad;
+@@ -752,16 +760,281 @@ static const struct imx789_mode imx789_modes[] = {
+ 		.crop = {
+ 			.left = 0,
+ 			.top = 0,
+-			.width = IMX789_NATIVE_WIDTH,
+-			.height = IMX789_NATIVE_HEIGHT,
++			.width = 8000,
++			.height = 6016,
+ 		},
+ 		.regs = imx789_mode_4000x3008_regs,
+ 		.num_regs = ARRAY_SIZE(imx789_mode_4000x3008_regs),
+ 	},
+ };
+ 
+-static const s64 imx789_link_freqs[] = {
+-	IMX789_LINK_FREQ,
++static const struct imx789_chip imx789_chip = {
++	.name = "imx789",
++	.id = 0x0789,
++	.init_regs = imx789_init_regs,
++	.num_init_regs = ARRAY_SIZE(imx789_init_regs),
++	.modes = imx789_modes,
++	.num_modes = ARRAY_SIZE(imx789_modes),
++	/* 19.2 MHz / 2 * 400 / 4 = 960 Msps */
++	.link_freq = 480000000,
++	/* VT PLL: 19.2 MHz / 3 * 174 / 5, eight pixels per clock */
++	.pixel_rate = 1781760000,
++	.native_width = 8000,
++	.native_height = 6016,
++};
++
++static const struct cci_reg_sequence imx766_init_regs[] = {
++	{ CCI_REG8(0x0136), 0x13 },
++	{ CCI_REG8(0x0137), 0x33 },
++	{ CCI_REG8(0x33f0), 0x02 },
++	{ CCI_REG8(0x33f1), 0x02 },
++	{ CCI_REG8(0x0111), 0x03 },
++	{ CCI_REG8(0x30cb), 0x01 },
++	{ CCI_REG8(0x33d3), 0x01 },
++	{ CCI_REG8(0x544a), 0xff },
++	{ CCI_REG8(0x544b), 0xff },
++	{ CCI_REG8(0x544e), 0x00 },
++	{ CCI_REG8(0x544f), 0xa5 },
++	{ CCI_REG8(0x5452), 0xff },
++	{ CCI_REG8(0x5453), 0xff },
++	{ CCI_REG8(0x5456), 0x00 },
++	{ CCI_REG8(0x5457), 0xa5 },
++	{ CCI_REG8(0x545a), 0xff },
++	{ CCI_REG8(0x545b), 0xff },
++	{ CCI_REG8(0x545e), 0x00 },
++	{ CCI_REG8(0x545f), 0xa5 },
++	{ CCI_REG8(0x5496), 0x00 },
++	{ CCI_REG8(0x5497), 0xa2 },
++	{ CCI_REG8(0x5902), 0x0e },
++	{ CCI_REG8(0x5a50), 0x04 },
++	{ CCI_REG8(0x5a51), 0x04 },
++	{ CCI_REG8(0x5b98), 0x00 },
++	{ CCI_REG8(0x5c49), 0x0d },
++	{ CCI_REG8(0x5c57), 0x0a },
++	{ CCI_REG8(0x5d60), 0x08 },
++	{ CCI_REG8(0x5d61), 0x08 },
++	{ CCI_REG8(0x5d62), 0x08 },
++	{ CCI_REG8(0x5d63), 0x08 },
++	{ CCI_REG8(0x5d64), 0x08 },
++	{ CCI_REG8(0x5d67), 0x08 },
++	{ CCI_REG8(0x5d6c), 0x08 },
++	{ CCI_REG8(0x5d6e), 0x08 },
++	{ CCI_REG8(0x5d71), 0x08 },
++	{ CCI_REG8(0x5d8e), 0x14 },
++	{ CCI_REG8(0x5dc0), 0x06 },
++	{ CCI_REG8(0x5dc1), 0x06 },
++	{ CCI_REG8(0x5dc2), 0x06 },
++	{ CCI_REG8(0x5dc3), 0x06 },
++	{ CCI_REG8(0x5dc4), 0x06 },
++	{ CCI_REG8(0x5dc7), 0x06 },
++	{ CCI_REG8(0x5dcc), 0x06 },
++	{ CCI_REG8(0x5dce), 0x06 },
++	{ CCI_REG8(0x5dd1), 0x06 },
++	{ CCI_REG8(0x60c2), 0x4a },
++	{ CCI_REG8(0x60c4), 0x4a },
++	{ CCI_REG8(0x60c6), 0x4a },
++	{ CCI_REG8(0x60c8), 0x4a },
++	{ CCI_REG8(0x60cb), 0x4a },
++	{ CCI_REG8(0x60d2), 0x4a },
++	{ CCI_REG8(0x60d4), 0x4a },
++	{ CCI_REG8(0x60d6), 0x4a },
++	{ CCI_REG8(0x60d8), 0x4a },
++	{ CCI_REG8(0x60db), 0x4a },
++	{ CCI_REG8(0x62f9), 0x14 },
++	{ CCI_REG8(0x6305), 0x13 },
++	{ CCI_REG8(0x6307), 0x13 },
++	{ CCI_REG8(0x630a), 0x13 },
++	{ CCI_REG8(0x632f), 0x2e },
++	{ CCI_REG8(0x6333), 0x2e },
++	{ CCI_REG8(0x6339), 0x2e },
++	{ CCI_REG8(0x6343), 0x2e },
++	{ CCI_REG8(0x6347), 0x2e },
++	{ CCI_REG8(0x634d), 0x2e },
++	{ CCI_REG8(0x638f), 0x95 },
++	{ CCI_REG8(0x6393), 0x95 },
++	{ CCI_REG8(0x6399), 0x95 },
++	{ CCI_REG8(0x63a3), 0x95 },
++	{ CCI_REG8(0x63a7), 0x95 },
++	{ CCI_REG8(0x63ad), 0x95 },
++	{ CCI_REG8(0xbd22), 0x00 },
++	{ CCI_REG8(0xbd23), 0x00 },
++	{ CCI_REG8(0xbd24), 0x00 },
++	{ CCI_REG8(0xbd25), 0x00 },
++	{ CCI_REG8(0xbd26), 0x00 },
++	{ CCI_REG8(0xbd27), 0x00 },
++	{ CCI_REG8(0xbd28), 0x00 },
++	{ CCI_REG8(0xbd29), 0x00 },
++	{ CCI_REG8(0xbd2a), 0x00 },
++	{ CCI_REG8(0xbd2b), 0x00 },
++	{ CCI_REG8(0xbd2c), 0x03 },
++	{ CCI_REG8(0xbd2d), 0x27 },
++	{ CCI_REG8(0xbd38), 0x00 },
++	{ CCI_REG8(0xbd39), 0x00 },
++	{ CCI_REG8(0xbd3a), 0x00 },
++	{ CCI_REG8(0xbd3b), 0x00 },
++	{ CCI_REG8(0xbd3c), 0x03 },
++	{ CCI_REG8(0xbd3d), 0x27 },
++	{ CCI_REG8(0xbe0f), 0x03 },
++	{ CCI_REG8(0x7931), 0x00 },
++	{ CCI_REG8(0xecc6), 0x00 },
++	{ CCI_REG8(0xbe0f), 0x02 },
++	{ CCI_REG8(0x7931), 0x00 },
++	{ CCI_REG8(0xa307), 0x30 },
++	{ CCI_REG8(0xa309), 0x30 },
++	{ CCI_REG8(0xa30b), 0x30 },
++	{ CCI_REG8(0xa406), 0x03 },
++	{ CCI_REG8(0xa407), 0x48 },
++	{ CCI_REG8(0xa408), 0x03 },
++	{ CCI_REG8(0xa409), 0x48 },
++	{ CCI_REG8(0xa40a), 0x03 },
++	{ CCI_REG8(0xa40b), 0x48 },
++	{ CCI_REG8(0x0106), 0x01 },
++};
++
++/* 4096x3072, 2x2 binned, 30 fps */
++static const struct cci_reg_sequence imx766_mode_4096x3072_regs[] = {
++	{ CCI_REG8(0x0112), 0x0a },
++	{ CCI_REG8(0x0113), 0x0a },
++	{ CCI_REG8(0x0114), 0x02 },
++	{ CCI_REG8(0x0342), 0x3d },
++	{ CCI_REG8(0x0343), 0x00 },
++	{ CCI_REG8(0x0340), 0x0d },
++	{ CCI_REG8(0x0341), 0x7c },
++	{ CCI_REG8(0x0344), 0x00 },
++	{ CCI_REG8(0x0345), 0x00 },
++	{ CCI_REG8(0x0346), 0x00 },
++	{ CCI_REG8(0x0347), 0x00 },
++	{ CCI_REG8(0x0348), 0x1f },
++	{ CCI_REG8(0x0349), 0xff },
++	{ CCI_REG8(0x034a), 0x17 },
++	{ CCI_REG8(0x034b), 0xff },
++	{ CCI_REG8(0x0900), 0x01 },
++	{ CCI_REG8(0x0901), 0x22 },
++	{ CCI_REG8(0x0902), 0x08 },
++	{ CCI_REG8(0x3005), 0x02 },
++	{ CCI_REG8(0x3120), 0x04 },
++	{ CCI_REG8(0x3121), 0x01 },
++	{ CCI_REG8(0x3200), 0x41 },
++	{ CCI_REG8(0x3201), 0x41 },
++	{ CCI_REG8(0x32d6), 0x00 },
++	{ CCI_REG8(0x0408), 0x00 },
++	{ CCI_REG8(0x0409), 0x00 },
++	{ CCI_REG8(0x040a), 0x00 },
++	{ CCI_REG8(0x040b), 0x00 },
++	{ CCI_REG8(0x040c), 0x10 },
++	{ CCI_REG8(0x040d), 0x00 },
++	{ CCI_REG8(0x040e), 0x0c },
++	{ CCI_REG8(0x040f), 0x00 },
++	{ CCI_REG8(0x034c), 0x10 },
++	{ CCI_REG8(0x034d), 0x00 },
++	{ CCI_REG8(0x034e), 0x0c },
++	{ CCI_REG8(0x034f), 0x00 },
++	{ CCI_REG8(0x0301), 0x05 },
++	{ CCI_REG8(0x0303), 0x04 },
++	{ CCI_REG8(0x0305), 0x03 },
++	{ CCI_REG8(0x0306), 0x01 },
++	{ CCI_REG8(0x0307), 0x3c },
++	{ CCI_REG8(0x030b), 0x02 },
++	{ CCI_REG8(0x030d), 0x02 },
++	{ CCI_REG8(0x030e), 0x00 },
++	{ CCI_REG8(0x030f), 0xe0 },
++	{ CCI_REG8(0x30cc), 0x10 },
++	{ CCI_REG8(0x30cd), 0x00 },
++	{ CCI_REG8(0x30ce), 0x03 },
++	{ CCI_REG8(0x30cf), 0x00 },
++	{ CCI_REG8(0x319c), 0x01 },
++	{ CCI_REG8(0xb542), 0x01 },
++	{ CCI_REG8(0xb543), 0x02 },
++	{ CCI_REG8(0xb59e), 0x01 },
++	{ CCI_REG8(0x0202), 0x0d },
++	{ CCI_REG8(0x0203), 0x4c },
++	{ CCI_REG8(0x0224), 0x01 },
++	{ CCI_REG8(0x0225), 0xf4 },
++	{ CCI_REG8(0x313a), 0x01 },
++	{ CCI_REG8(0x313b), 0xf4 },
++	{ CCI_REG8(0x0204), 0x00 },
++	{ CCI_REG8(0x0205), 0x00 },
++	{ CCI_REG8(0x020e), 0x01 },
++	{ CCI_REG8(0x020f), 0x00 },
++	{ CCI_REG8(0x0216), 0x00 },
++	{ CCI_REG8(0x0217), 0x00 },
++	{ CCI_REG8(0x0218), 0x01 },
++	{ CCI_REG8(0x0219), 0x00 },
++	{ CCI_REG8(0x313c), 0x00 },
++	{ CCI_REG8(0x313d), 0x00 },
++	{ CCI_REG8(0x313e), 0x01 },
++	{ CCI_REG8(0x313f), 0x00 },
++	{ CCI_REG8(0x0860), 0x01 },
++	{ CCI_REG8(0x0861), 0x2d },
++	{ CCI_REG8(0x0862), 0x01 },
++	{ CCI_REG8(0x0863), 0x2d },
++	{ CCI_REG8(0x30b4), 0x01 },
++	{ CCI_REG8(0x3066), 0x00 },
++	{ CCI_REG8(0x3067), 0x30 },
++	{ CCI_REG8(0x3068), 0x00 },
++	{ CCI_REG8(0x3069), 0x30 },
++	{ CCI_REG8(0x33d0), 0x00 },
++	{ CCI_REG8(0x33d1), 0x00 },
++	{ CCI_REG8(0x33d4), 0x01 },
++	{ CCI_REG8(0x33dc), 0x0a },
++	{ CCI_REG8(0x33dd), 0x0a },
++	{ CCI_REG8(0x33de), 0x0a },
++	{ CCI_REG8(0x33df), 0x0a },
++	{ CCI_REG8(0x3070), 0x01 },
++	{ CCI_REG8(0x3077), 0x01 },
++	{ CCI_REG8(0x3078), 0x30 },
++	{ CCI_REG8(0x3079), 0x01 },
++	{ CCI_REG8(0x307a), 0x30 },
++	{ CCI_REG8(0x307b), 0x01 },
++	{ CCI_REG8(0x3080), 0x02 },
++	{ CCI_REG8(0x3087), 0x02 },
++	{ CCI_REG8(0x3088), 0x30 },
++	{ CCI_REG8(0x3089), 0x02 },
++	{ CCI_REG8(0x308a), 0x30 },
++	{ CCI_REG8(0x308b), 0x02 },
++	{ CCI_REG8(0x3901), 0x2b },
++	{ CCI_REG8(0x3902), 0x00 },
++	{ CCI_REG8(0x3903), 0x12 },
++	{ CCI_REG8(0x3905), 0x2b },
++	{ CCI_REG8(0x3906), 0x01 },
++	{ CCI_REG8(0x3907), 0x12 },
++	{ CCI_REG8(0x3909), 0x2b },
++	{ CCI_REG8(0x390a), 0x02 },
++	{ CCI_REG8(0x390b), 0x12 },
++	{ CCI_REG8(0x3911), 0x00 },
++	{ CCI_REG8(0x30cb), 0x00 },
++};
++
++static const struct imx789_mode imx766_modes[] = {
++	{
++		.width = 4096,
++		.height = 3072,
++		.fll = 3452,
++		.llp = 15616,
++		.crop = {
++			.left = 0,
++			.top = 0,
++			.width = 8192,
++			.height = 6144,
++		},
++		.regs = imx766_mode_4096x3072_regs,
++		.num_regs = ARRAY_SIZE(imx766_mode_4096x3072_regs),
++	},
++};
++
++static const struct imx789_chip imx766_chip = {
++	.name = "imx766",
++	.id = 0x0766,
++	.init_regs = imx766_init_regs,
++	.num_init_regs = ARRAY_SIZE(imx766_init_regs),
++	.modes = imx766_modes,
++	.num_modes = ARRAY_SIZE(imx766_modes),
++	/* 19.2 MHz / 2 * 224 / 2 = 1075.2 Msps */
++	.link_freq = 537600000,
++	/* VT PLL: 19.2 MHz / 3 * 316 / 5, four pixels per clock */
++	.pixel_rate = 1617920000,
++	.native_width = 8192,
++	.native_height = 6144,
+ };
+ 
+ /* Bayer order by flip: none, h, v, h + v */
+@@ -867,13 +1140,15 @@ static int imx789_enum_frame_size(struct v4l2_subdev *sd,
+ 				  struct v4l2_subdev_state *state,
+ 				  struct v4l2_subdev_frame_size_enum *fse)
+ {
+-	if (fse->index >= ARRAY_SIZE(imx789_modes) ||
++	const struct imx789_chip *chip = to_imx789(sd)->chip;
++
++	if (fse->index >= chip->num_modes ||
+ 	    fse->code != imx789_code(to_imx789(sd)))
+ 		return -EINVAL;
+ 
+-	fse->min_width = imx789_modes[fse->index].width;
++	fse->min_width = chip->modes[fse->index].width;
+ 	fse->max_width = fse->min_width;
+-	fse->min_height = imx789_modes[fse->index].height;
++	fse->min_height = chip->modes[fse->index].height;
+ 	fse->max_height = fse->min_height;
+ 
+ 	return 0;
+@@ -887,7 +1162,7 @@ static int imx789_set_pad_format(struct v4l2_subdev *sd,
+ 	const struct imx789_mode *mode;
+ 	int ret;
+ 
+-	mode = v4l2_find_nearest_size(imx789_modes, ARRAY_SIZE(imx789_modes),
++	mode = v4l2_find_nearest_size(sensor->chip->modes, sensor->chip->num_modes,
+ 				      width, height, fmt->format.width,
+ 				      fmt->format.height);
+ 
+@@ -929,8 +1204,8 @@ static int imx789_get_selection(struct v4l2_subdev *sd,
+ 	case V4L2_SEL_TGT_CROP_BOUNDS:
+ 		sel->r.left = 0;
+ 		sel->r.top = 0;
+-		sel->r.width = IMX789_NATIVE_WIDTH;
+-		sel->r.height = IMX789_NATIVE_HEIGHT;
++		sel->r.width = to_imx789(sd)->chip->native_width;
++		sel->r.height = to_imx789(sd)->chip->native_height;
+ 		return 0;
+ 	}
+ 
+@@ -940,11 +1215,12 @@ static int imx789_get_selection(struct v4l2_subdev *sd,
+ static int imx789_init_state(struct v4l2_subdev *sd,
+ 			     struct v4l2_subdev_state *state)
+ {
++	const struct imx789_mode *mode = &to_imx789(sd)->chip->modes[0];
+ 	struct v4l2_subdev_format fmt = {
+ 		.which = V4L2_SUBDEV_FORMAT_TRY,
+ 		.format = {
+-			.width = imx789_modes[0].width,
+-			.height = imx789_modes[0].height,
++			.width = mode->width,
++			.height = mode->height,
+ 		},
+ 	};
+ 
+@@ -965,11 +1241,11 @@ static int imx789_enable_streams(struct v4l2_subdev *sd,
+ 		return ret;
+ 
+ 	fmt = v4l2_subdev_state_get_format(state, 0);
+-	mode = v4l2_find_nearest_size(imx789_modes, ARRAY_SIZE(imx789_modes),
++	mode = v4l2_find_nearest_size(sensor->chip->modes, sensor->chip->num_modes,
+ 				      width, height, fmt->width, fmt->height);
+ 
+-	ret = cci_multi_reg_write(sensor->regmap, imx789_init_regs,
+-				  ARRAY_SIZE(imx789_init_regs), NULL);
++	ret = cci_multi_reg_write(sensor->regmap, sensor->chip->init_regs,
++				  sensor->chip->num_init_regs, NULL);
+ 	if (ret)
+ 		goto err_put;
+ 
+@@ -1085,7 +1361,8 @@ static int imx789_power_off(struct device *dev)
+ 
+ static int imx789_init_controls(struct imx789 *sensor)
+ {
+-	const struct imx789_mode *mode = &imx789_modes[0];
++	const struct imx789_mode *mode = &sensor->chip->modes[0];
++	u64 pixel_rate = sensor->chip->pixel_rate;
+ 	struct v4l2_fwnode_device_properties props;
+ 	struct v4l2_ctrl_handler *hdl = &sensor->ctrls;
+ 	struct v4l2_ctrl *ctrl;
+@@ -1098,14 +1375,12 @@ static int imx789_init_controls(struct imx789 *sensor)
+ 	v4l2_ctrl_handler_init(hdl, 12);
+ 
+ 	ctrl = v4l2_ctrl_new_int_menu(hdl, &imx789_ctrl_ops, V4L2_CID_LINK_FREQ,
+-				      ARRAY_SIZE(imx789_link_freqs) - 1, 0,
+-				      imx789_link_freqs);
++				      0, 0, &sensor->chip->link_freq);
+ 	if (ctrl)
+ 		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+ 
+ 	v4l2_ctrl_new_std(hdl, &imx789_ctrl_ops, V4L2_CID_PIXEL_RATE,
+-			  IMX789_PIXEL_RATE, IMX789_PIXEL_RATE, 1,
+-			  IMX789_PIXEL_RATE);
++			  pixel_rate, pixel_rate, 1, pixel_rate);
+ 
+ 	sensor->vblank = v4l2_ctrl_new_std(hdl, &imx789_ctrl_ops,
+ 					   V4L2_CID_VBLANK,
+@@ -1189,8 +1464,7 @@ static int imx789_parse_endpoint(struct imx789 *sensor)
+ 
+ 	ret = v4l2_link_freq_to_bitmap(sensor->dev, ep.link_frequencies,
+ 				       ep.nr_of_link_frequencies,
+-				       imx789_link_freqs,
+-				       ARRAY_SIZE(imx789_link_freqs), &bitmap);
++				       &sensor->chip->link_freq, 1, &bitmap);
+ out:
+ 	v4l2_fwnode_endpoint_free(&ep);
+ 
+@@ -1209,6 +1483,7 @@ static int imx789_probe(struct i2c_client *client)
+ 		return -ENOMEM;
+ 
+ 	sensor->dev = dev;
++	sensor->chip = device_get_match_data(dev);
+ 
+ 	ret = imx789_parse_endpoint(sensor);
+ 	if (ret)
+@@ -1239,6 +1514,7 @@ static int imx789_probe(struct i2c_client *client)
+ 		return PTR_ERR(sensor->regmap);
+ 
+ 	v4l2_i2c_subdev_init(&sensor->sd, client, &imx789_subdev_ops);
++	v4l2_i2c_subdev_set_name(&sensor->sd, client, sensor->chip->name, NULL);
+ 
+ 	ret = imx789_power_on(dev);
+ 	if (ret)
+@@ -1249,7 +1525,7 @@ static int imx789_probe(struct i2c_client *client)
+ 		dev_err_probe(dev, ret, "failed to read chip id\n");
+ 		goto err_power_off;
+ 	}
+-	if (id != IMX789_CHIP_ID) {
++	if (id != sensor->chip->id) {
+ 		ret = dev_err_probe(dev, -ENODEV, "unexpected chip id 0x%04llx\n",
+ 				    id);
+ 		goto err_power_off;
+@@ -1318,7 +1594,8 @@ static DEFINE_RUNTIME_DEV_PM_OPS(imx789_pm_ops, imx789_power_off,
+ 				 imx789_power_on, NULL);
+ 
+ static const struct of_device_id imx789_of_match[] = {
+-	{ .compatible = "sony,imx789" },
++	{ .compatible = "sony,imx766", .data = &imx766_chip },
++	{ .compatible = "sony,imx789", .data = &imx789_chip },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, imx789_of_match);
+@@ -1334,5 +1611,5 @@ static struct i2c_driver imx789_driver = {
+ };
+ module_i2c_driver(imx789_driver);
+ 
+-MODULE_DESCRIPTION("Sony IMX789 image sensor driver");
++MODULE_DESCRIPTION("Sony IMX789/IMX766 image sensor driver");
+ MODULE_LICENSE("GPL");

@@ -1,0 +1,52 @@
+From f8cfc48f681a268111d5c61883f45baafa2000e2 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 07:21:33 +0000
+Subject: [PATCH 011/110] arm64: dts: qcom: sm8350-lemonadep: 9 Pro
+ framebuffer, ABL ids, bring-up USB peripheral
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 244611cbb69..87d94653c61 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -12,6 +12,10 @@
+ / {
+ 	compatible = "oneplus,lemonadep", "qcom,sm8350";
+ 	model = "OnePlus 9 Pro";
++
++	/* Needed by the stock ABL to accept an appended DTB (values from dtbo entry 2) */
++	qcom,msm-id = <0x19f 0x20001>;
++	qcom,board-id = <0x10008 0>;
+ };
+ 
+ &display_panel {
+@@ -19,6 +23,13 @@ &display_panel {
+ 	status = "fail";
+ };
+ 
++/* 9 Pro panel is 1440x3216; bootloader splash stays at the same address as on the 9 */
++&framebuffer {
++	width = <1440>;
++	height = <3216>;
++	stride = <(1440 * 4)>;
++};
++
+ &mpss {
+ 	pinctrl-0 = <&rf_cable_ant0_active>;
+ 	pinctrl-names = "default";
+@@ -46,3 +57,11 @@ tp_rst_suspend: tp-rst-suspend-state {
+ 		bias-pull-down;
+ 	};
+ };
++
++/*
++ * BRING-UP ONLY: pin USB to device mode so the USB gadget works before
++ * ADSP/pmic_glink role switching is up. Remove once role switching works.
++ */
++&usb_1_dwc3 {
++	dr_mode = "peripheral";
++};

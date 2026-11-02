@@ -1,0 +1,41 @@
+From fb56089d80bebd2201858dfed0e083af7abc00df Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 17:54:52 +0000
+Subject: [PATCH 020/110] arm64: dts: qcom: sm8350-oneplus: enable the Adreno
+ 660 GPU
+
+Point the zap shader at the device-signed firmware and enable the GPU.
+SQE and GMU firmware are the generic qcom/a660_{sqe.fw,gmu.bin}.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index cbdcb3f779f..16356b74fd1 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -604,18 +604,12 @@ &dispcc {
+ 	//status = "okay";
+ };
+ 
+-&gmu {
+-	/* FIXME: check_dtbs complains */
+-	//firmware-name = "qcom/sm8350/lemonade/a660_gmu.bin";
+-};
+-
+ &gpu {
+-	//status = "okay";
++	status = "okay";
++};
+ 
+-	zap-shader {
+-		memory-region = <&pil_gpu_mem>;
+-		firmware-name = "qcom/sm8350/lemonade/a660_zap.mbn";
+-	};
++&gpu_zap_shader {
++	firmware-name = "qcom/sm8350/OnePlus/lemonade/a660_zap.mbn";
+ };
+ 
+ &i2c2 {

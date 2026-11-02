@@ -1,0 +1,25 @@
+[Unit]
+Description=Phosh, a shell for mobile phones
+After=systemd-user-sessions.service
+Wants=dbus.socket systemd-logind.service
+Conflicts=getty@tty7.service
+After=getty@tty7.service
+
+[Service]
+Type=simple
+ExecStartPre=+/usr/bin/chvt 7
+ExecStart=/usr/bin/phosh-session
+User=1000
+WorkingDirectory=~
+PAMName=phosh
+TTYPath=/dev/tty7
+StandardInput=tty
+TTYReset=yes
+TTYVHangup=yes
+UtmpIdentifier=tty7
+UtmpMode=user
+Restart=always
+RestartSec=5s
+
+[Install]
+Alias=display-manager.service

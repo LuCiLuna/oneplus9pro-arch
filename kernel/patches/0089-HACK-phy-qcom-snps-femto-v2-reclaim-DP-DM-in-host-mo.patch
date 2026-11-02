@@ -1,0 +1,131 @@
+From 10522169edc512b5c87ef96f77e27664b8eccdf6 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 06:17:28 +0000
+Subject: [PATCH 089/110] HACK: phy: qcom: snps-femto-v2: reclaim DP/DM in host
+ mode too
+
+With OTG on the OnePlus 9 Pro, the charger firmware sees VBUS from the
+external boost, runs charger detection a few seconds later and leaves the
+datapath overridden, so the device on the host port drops off and cannot
+enumerate again. Check for that once a second for 20 s after entering
+host mode, as the gadget side does after bus resets.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c | 75 +++++++++++++++----
+ 1 file changed, 59 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c b/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
+index ee67e0245d4..e047bcf76e3 100644
+--- a/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
++++ b/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
+@@ -5,6 +5,7 @@
+ 
+ #include <linux/clk.h>
+ #include <linux/delay.h>
++#include <linux/devm-helpers.h>
+ #include <linux/err.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+@@ -138,6 +139,8 @@ struct qcom_snps_hsphy {
+ 
+ 	bool phy_initialized;
+ 	enum phy_mode mode;
++	struct delayed_work host_reclaim_work;
++	unsigned int host_reclaim_checks;
+ 	struct phy_override_seq update_seq_cfg[NUM_HSPHY_TUNING_PARAMS];
+ };
+ 
+@@ -229,6 +232,50 @@ static int __maybe_unused qcom_snps_hsphy_runtime_resume(struct device *dev)
+ 	return qcom_snps_hsphy_resume(hsphy);
+ }
+ 
++/*
++ * HACK (OnePlus 9 Pro): when VBUS appears, from a charger or from our own OTG
++ * boost, the charger firmware takes DP/DM for charger detection by overriding
++ * the UTMI datapath into non-driving mode, and leaves it so; the D+ pull-up
++ * then never reaches the host, or a device on the host port drops off. Hand
++ * the datapath back to the controller.
++ */
++static void qcom_snps_hsphy_reclaim(struct qcom_snps_hsphy *hsphy)
++{
++	if (!(readl_relaxed(hsphy->base + USB2_PHY_USB_PHY_CFG0) &
++	      UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN))
++		return;
++
++	dev_info(&hsphy->phy->dev, "reclaiming DP/DM from charger detection\n");
++	qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_UTMI_CTRL0,
++				   OPMODE_MASK, 0);
++	qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_HS_PHY_CTRL2,
++				   USB2_SUSPEND_N_SEL, 0);
++	qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_CFG0,
++				   UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN, 0);
++}
++
++/*
++ * In host mode the firmware grabs DP/DM seconds after it turns the OTG boost
++ * on, so keep checking for a while after entering host mode.
++ */
++#define HOST_RECLAIM_MS		1000
++#define HOST_RECLAIM_CHECKS	20
++
++static void qcom_snps_hsphy_host_reclaim_work(struct work_struct *work)
++{
++	struct qcom_snps_hsphy *hsphy = container_of(work, struct qcom_snps_hsphy,
++						     host_reclaim_work.work);
++
++	mutex_lock(&hsphy->phy->mutex);
++	if (hsphy->phy_initialized && hsphy->mode == PHY_MODE_USB_HOST) {
++		qcom_snps_hsphy_reclaim(hsphy);
++		if (--hsphy->host_reclaim_checks)
++			queue_delayed_work(system_dfl_wq, &hsphy->host_reclaim_work,
++					   msecs_to_jiffies(HOST_RECLAIM_MS));
++	}
++	mutex_unlock(&hsphy->phy->mutex);
++}
++
+ static int qcom_snps_hsphy_set_mode(struct phy *phy, enum phy_mode mode,
+ 				    int submode)
+ {
+@@ -236,22 +283,13 @@ static int qcom_snps_hsphy_set_mode(struct phy *phy, enum phy_mode mode,
+ 
+ 	hsphy->mode = mode;
+ 
+-	/*
+-	 * On cable insertion the charger firmware takes DP/DM for charger
+-	 * detection by overriding the UTMI datapath into non-driving mode,
+-	 * and leaves it so; the D+ pull-up then never reaches the host. Hand
+-	 * the datapath back to the controller when it wants device mode.
+-	 */
+-	if (hsphy->phy_initialized && mode == PHY_MODE_USB_DEVICE &&
+-	    (readl_relaxed(hsphy->base + USB2_PHY_USB_PHY_CFG0) &
+-	     UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN)) {
+-		dev_info(&phy->dev, "reclaiming DP/DM from charger detection\n");
+-		qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_UTMI_CTRL0,
+-					   OPMODE_MASK, 0);
+-		qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_HS_PHY_CTRL2,
+-					   USB2_SUSPEND_N_SEL, 0);
+-		qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_CFG0,
+-					   UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN, 0);
++	if (hsphy->phy_initialized && mode == PHY_MODE_USB_DEVICE)
++		qcom_snps_hsphy_reclaim(hsphy);
++
++	if (mode == PHY_MODE_USB_HOST) {
++		hsphy->host_reclaim_checks = HOST_RECLAIM_CHECKS;
++		mod_delayed_work(system_dfl_wq, &hsphy->host_reclaim_work,
++				 msecs_to_jiffies(HOST_RECLAIM_MS));
+ 	}
+ 
+ 	return 0;
+@@ -621,6 +659,11 @@ static int qcom_snps_hsphy_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, ret,
+ 				     "failed to get regulator supplies\n");
+ 
++	ret = devm_delayed_work_autocancel(dev, &hsphy->host_reclaim_work,
++					   qcom_snps_hsphy_host_reclaim_work);
++	if (ret)
++		return ret;
++
+ 	/*
+ 	 * Enable runtime PM before creating the PHY, phy_create() only enables
+ 	 * it on the PHY device if already enabled on the parent. Hold a usage

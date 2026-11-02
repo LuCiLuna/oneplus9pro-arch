@@ -1,0 +1,290 @@
+From 993bc443ad8887dc2397ca11645493ca02fae1da Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:06:57 +0000
+Subject: [PATCH 068/110] media: i2c: add onsemi LC898229 VCM driver
+
+The LC898229 is a closed loop voice coil motor driver; it focuses the
+OnePlus 9 Pro ultrawide camera. Power up takes it out of standby
+(0xe0), waits for it to finish initialising (0xb3 reads 0, which takes
+over 50 ms) and then takes 10 bit target positions at 0x84.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/Kconfig    |  11 ++
+ drivers/media/i2c/Makefile   |   1 +
+ drivers/media/i2c/lc898229.c | 232 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 244 insertions(+)
+ create mode 100644 drivers/media/i2c/lc898229.c
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index d33a8ad437a..9ad072fa2c5 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -948,6 +948,17 @@ config VIDEO_AK7375
+ 	  capability. This is designed for linear control of
+ 	  voice coil motors, controlled via I2C serial interface.
+ 
++config VIDEO_LC898229
++	tristate "onsemi LC898229 lens voice coil support"
++	depends on I2C && VIDEO_DEV
++	select MEDIA_CONTROLLER
++	select VIDEO_V4L2_SUBDEV_API
++	select V4L2_ASYNC
++	select V4L2_CCI_I2C
++	help
++	  This is a driver for the onsemi LC898229 closed loop voice coil
++	  motor driver, which positions camera lenses for focusing.
++
+ config VIDEO_DW9714
+ 	tristate "DW9714 lens voice coil support"
+ 	depends on GPIOLIB
+diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
+index 86975f17abe..11305b61119 100644
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -33,6 +33,7 @@ obj-$(CONFIG_VIDEO_DS90UB913) += ds90ub913.o
+ obj-$(CONFIG_VIDEO_DS90UB953) += ds90ub953.o
+ obj-$(CONFIG_VIDEO_DS90UB960) += ds90ub960.o
+ obj-$(CONFIG_VIDEO_DW9714) += dw9714.o
++obj-$(CONFIG_VIDEO_LC898229) += lc898229.o
+ obj-$(CONFIG_VIDEO_DW9719) += dw9719.o
+ obj-$(CONFIG_VIDEO_DW9768) += dw9768.o
+ obj-$(CONFIG_VIDEO_DW9807_VCM) += dw9807-vcm.o
+diff --git a/drivers/media/i2c/lc898229.c b/drivers/media/i2c/lc898229.c
+new file mode 100644
+index 00000000000..2ab235804a7
+--- /dev/null
++++ b/drivers/media/i2c/lc898229.c
+@@ -0,0 +1,232 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * onsemi LC898229 closed loop voice coil motor driver
++ *
++ * Sequence from the OnePlus 9 Pro ultrawide camera module data: leave
++ * standby, wait for the internal initialisation to finish, then write
++ * 10 bit target positions.
++ */
++
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/pm_runtime.h>
++#include <linux/regulator/consumer.h>
++#include <media/v4l2-cci.h>
++#include <media/v4l2-ctrls.h>
++#include <media/v4l2-device.h>
++
++#define LC898229_REG_POSITION		CCI_REG16(0x84)
++#define LC898229_REG_STATUS		CCI_REG8(0xb3)
++#define LC898229_REG_STANDBY		CCI_REG8(0xe0)
++#define LC898229_ACTIVE			0x01
++#define LC898229_STANDBY		0x00
++
++#define LC898229_POSITION_MAX		1023
++
++static const char * const lc898229_supply_names[] = {
++	"vdd",
++	"vio",
++};
++
++struct lc898229 {
++	struct v4l2_subdev sd;
++	struct v4l2_ctrl_handler ctrls;
++	struct v4l2_ctrl *focus;
++	struct regmap *regmap;
++	struct regulator_bulk_data supplies[ARRAY_SIZE(lc898229_supply_names)];
++};
++
++static inline struct lc898229 *to_lc898229(struct v4l2_subdev *sd)
++{
++	return container_of(sd, struct lc898229, sd);
++}
++
++static int lc898229_set_ctrl(struct v4l2_ctrl *ctrl)
++{
++	struct lc898229 *vcm = container_of(ctrl->handler, struct lc898229,
++					    ctrls);
++	int ret;
++
++	if (ctrl->id != V4L2_CID_FOCUS_ABSOLUTE)
++		return -EINVAL;
++
++	if (!pm_runtime_get_if_in_use(vcm->sd.dev))
++		return 0;
++
++	ret = cci_write(vcm->regmap, LC898229_REG_POSITION, ctrl->val, NULL);
++
++	pm_runtime_put(vcm->sd.dev);
++
++	return ret;
++}
++
++static const struct v4l2_ctrl_ops lc898229_ctrl_ops = {
++	.s_ctrl = lc898229_set_ctrl,
++};
++
++static int lc898229_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
++{
++	return pm_runtime_resume_and_get(sd->dev);
++}
++
++static int lc898229_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
++{
++	pm_runtime_put(sd->dev);
++
++	return 0;
++}
++
++static const struct v4l2_subdev_internal_ops lc898229_internal_ops = {
++	.open = lc898229_open,
++	.close = lc898229_close,
++};
++
++static const struct v4l2_subdev_ops lc898229_ops = { };
++
++static int lc898229_power_on(struct device *dev)
++{
++	struct lc898229 *vcm = to_lc898229(dev_get_drvdata(dev));
++	u64 status = 0;
++	int ret, err;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(vcm->supplies), vcm->supplies);
++	if (ret)
++		return ret;
++
++	usleep_range(5000, 6000);
++
++	ret = cci_write(vcm->regmap, LC898229_REG_STANDBY, LC898229_ACTIVE,
++			NULL);
++	if (ret)
++		goto err_off;
++
++	/* Busy while it initialises */
++	ret = read_poll_timeout(cci_read, err, err || !status, 1000, 500000,
++				true, vcm->regmap, LC898229_REG_STATUS, &status,
++				NULL);
++	if (!ret)
++		ret = err;
++	if (ret)
++		goto err_off;
++
++	ret = cci_write(vcm->regmap, LC898229_REG_POSITION, vcm->focus->val,
++			NULL);
++	if (ret)
++		goto err_off;
++
++	return 0;
++
++err_off:
++	dev_err(dev, "failed to power on: %d (status 0x%llx)\n", ret, status);
++	regulator_bulk_disable(ARRAY_SIZE(vcm->supplies), vcm->supplies);
++
++	return ret;
++}
++
++static int lc898229_power_off(struct device *dev)
++{
++	struct lc898229 *vcm = to_lc898229(dev_get_drvdata(dev));
++
++	cci_write(vcm->regmap, LC898229_REG_STANDBY, LC898229_STANDBY, NULL);
++	regulator_bulk_disable(ARRAY_SIZE(vcm->supplies), vcm->supplies);
++
++	return 0;
++}
++
++static int lc898229_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct lc898229 *vcm;
++	int ret;
++
++	vcm = devm_kzalloc(dev, sizeof(*vcm), GFP_KERNEL);
++	if (!vcm)
++		return -ENOMEM;
++
++	for (unsigned int i = 0; i < ARRAY_SIZE(lc898229_supply_names); i++)
++		vcm->supplies[i].supply = lc898229_supply_names[i];
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(vcm->supplies),
++				      vcm->supplies);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get supplies\n");
++
++	vcm->regmap = devm_cci_regmap_init_i2c(client, 8);
++	if (IS_ERR(vcm->regmap))
++		return PTR_ERR(vcm->regmap);
++
++	v4l2_i2c_subdev_init(&vcm->sd, client, &lc898229_ops);
++	vcm->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
++	vcm->sd.internal_ops = &lc898229_internal_ops;
++	vcm->sd.entity.function = MEDIA_ENT_F_LENS;
++
++	v4l2_ctrl_handler_init(&vcm->ctrls, 1);
++	vcm->focus = v4l2_ctrl_new_std(&vcm->ctrls, &lc898229_ctrl_ops,
++				       V4L2_CID_FOCUS_ABSOLUTE, 0,
++				       LC898229_POSITION_MAX, 1, 0);
++	if (vcm->ctrls.error) {
++		ret = vcm->ctrls.error;
++		goto err_ctrls;
++	}
++	vcm->sd.ctrl_handler = &vcm->ctrls;
++
++	ret = media_entity_pads_init(&vcm->sd.entity, 0, NULL);
++	if (ret)
++		goto err_ctrls;
++
++	pm_runtime_enable(dev);
++
++	ret = v4l2_async_register_subdev(&vcm->sd);
++	if (ret)
++		goto err_pm;
++
++	return 0;
++
++err_pm:
++	pm_runtime_disable(dev);
++	media_entity_cleanup(&vcm->sd.entity);
++err_ctrls:
++	v4l2_ctrl_handler_free(&vcm->ctrls);
++
++	return ret;
++}
++
++static void lc898229_remove(struct i2c_client *client)
++{
++	struct v4l2_subdev *sd = i2c_get_clientdata(client);
++	struct lc898229 *vcm = to_lc898229(sd);
++
++	v4l2_async_unregister_subdev(sd);
++	v4l2_ctrl_handler_free(&vcm->ctrls);
++	media_entity_cleanup(&sd->entity);
++
++	pm_runtime_disable(&client->dev);
++	if (!pm_runtime_status_suspended(&client->dev)) {
++		lc898229_power_off(&client->dev);
++		pm_runtime_set_suspended(&client->dev);
++	}
++}
++
++static DEFINE_RUNTIME_DEV_PM_OPS(lc898229_pm_ops, lc898229_power_off,
++				 lc898229_power_on, NULL);
++
++static const struct of_device_id lc898229_of_match[] = {
++	{ .compatible = "onnn,lc898229" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, lc898229_of_match);
++
++static struct i2c_driver lc898229_driver = {
++	.driver = {
++		.name = "lc898229",
++		.of_match_table = lc898229_of_match,
++		.pm = pm_ptr(&lc898229_pm_ops),
++	},
++	.probe = lc898229_probe,
++	.remove = lc898229_remove,
++};
++module_i2c_driver(lc898229_driver);
++
++MODULE_DESCRIPTION("onsemi LC898229 VCM driver");
++MODULE_LICENSE("GPL");

@@ -1,0 +1,16 @@
+[Unit]
+Description=Set the clock from the read-only PMIC RTC and a saved offset
+DefaultDependencies=no
+After=local-fs.target
+Before=time-set.target sysinit.target systemd-timesyncd.service shutdown.target
+Wants=time-set.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/rtc-offset restore
+ExecStop=/usr/local/bin/rtc-offset save
+
+[Install]
+WantedBy=sysinit.target

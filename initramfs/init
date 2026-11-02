@@ -1,0 +1,109 @@
+#!/bin/busybox sh
+# OP9 Pro bring-up initramfs: USB NCM network + telnet root shell. Never reboots by itself.
+/bin/busybox mkdir -p /usr/bin /usr/sbin
+/bin/busybox --install -s
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
+mkdir -p /dev/pts; mount -t devpts devpts /dev/pts
+mount -t configfs configfs /sys/kernel/config; mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+exec >/dev/kmsg 2>&1
+echo "op9-initramfs: started"
+
+# Debug: op9.reboot_after=N on the cmdline warm-reboots after N seconds so the
+# ramoops console log survives and can be read from Android afterwards.
+RA=$(sed -n 's/.*op9\.reboot_after=\([0-9]*\).*/\1/p' /proc/cmdline); [ -z "$RA" ] && [ -f /etc/reboot_after ] && RA=$(cat /etc/reboot_after)
+if [ -n "$RA" ]; then
+	( sleep "$RA"; echo "op9-initramfs: reboot_after=$RA reached, warm reboot"
+	  ls /sys/class/udc /sys/class/net; cat /proc/interrupts | head -5
+	  echo b > /proc/sysrq-trigger ) &
+fi
+
+# Wait up to 3s for the USB device controller. It can depend on modules that
+# only live on the rootfs (e.g. the QMP USB3 PHY), so never block the boot on
+# it; the rootfs binds the gadget once the controller shows up.
+n=0
+while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ $n -lt 3 ]; do
+	[ $n -eq 0 ] && echo "op9-initramfs: waiting for UDC (${n}s)"
+	n=$((n + 1)); sleep 1
+done
+UDC=$(ls /sys/class/udc 2>/dev/null | head -1)
+echo "op9-initramfs: UDC=${UDC:-none} after ${n}s"
+
+G=/sys/kernel/config/usb_gadget/g1
+mkdir -p $G && cd $G
+echo 0x18d1 > idVendor; echo 0xd001 > idProduct
+mkdir -p strings/0x409
+echo "OnePlus" > strings/0x409/manufacturer
+echo "OP9 Pro mainline bring-up" > strings/0x409/product
+echo "op9-$(cat /proc/sys/kernel/random/boot_id | cut -c1-8)" > strings/0x409/serialnumber
+mkdir -p functions/ncm.usb0 functions/acm.gs0 configs/c.1/strings/0x409
+echo "NCM + serial" > configs/c.1/strings/0x409/configuration
+ln -s functions/ncm.usb0 configs/c.1/
+ln -s functions/acm.gs0 configs/c.1/
+[ -n "$UDC" ] && echo "$UDC" > UDC
+cd /
+
+# usb0 only exists once the gadget is bound to a controller
+if [ -n "$UDC" ]; then
+for i in $(seq 1 10); do ip link show usb0 >/dev/null 2>&1 && break; sleep 1; done
+fi
+ip addr add 172.16.42.1/24 dev usb0 2>/dev/null; ip link set usb0 up 2>/dev/null
+mkdir -p /var/lib/misc
+cat > /etc/udhcpd.conf <<EOC
+start 172.16.42.2
+end 172.16.42.2
+interface usb0
+max_leases 1
+option subnet 255.255.255.0
+EOC
+touch /var/lib/misc/udhcpd.leases
+udhcpd /etc/udhcpd.conf
+telnetd -l /bin/sh -b 172.16.42.1
+# Serial shell too, in case networking fails
+( while true; do [ -e /dev/ttyGS0 ] && sh </dev/ttyGS0 >/dev/ttyGS0 2>&1; sleep 1; done ) &
+SERIAL_PID=$!
+echo "op9-initramfs: USB ready (serial on ttyGS0, NCM 172.16.42.1)"
+
+# Root filesystem: ext4 on the old Android userdata partition, falling back to
+# the "linux" logical partition in super (dm-linear) if that fails.
+# op9.root=super forces the fallback.
+find_part() {
+	PART=""; n=0
+	while [ -z "$PART" ] && [ $n -lt 30 ]; do
+		for d in /sys/class/block/*; do
+			grep -qx "PARTNAME=$1" "$d/uevent" 2>/dev/null && PART=$(cat "$d/dev")
+		done
+		[ -z "$PART" ] && { n=$((n + 1)); sleep 1; }
+	done
+	[ -n "$PART" ] || { echo "op9-initramfs: $1 not found"; return 1; }
+	mkdir -p /dev/op9; rm -f "/dev/op9/$1"
+	mknod "/dev/op9/$1" b "${PART%:*}" "${PART#*:}"
+	echo "/dev/op9/$1"
+}
+
+try_root() {
+	mkdir -p /sysroot
+	mount -t ext4 -o rw "$1" /sysroot || { echo "op9-initramfs: mount $1 failed"; return 1; }
+	if [ -e /sysroot/sbin/init ] || [ -L /sysroot/sbin/init ]; then
+		echo "op9-initramfs: switching to rootfs on $1"
+		kill "$SERIAL_PID" 2>/dev/null
+		umount /sys/kernel/debug /sys/kernel/config /dev/pts 2>/dev/null
+		exec switch_root /sysroot /sbin/init
+	fi
+	echo "op9-initramfs: no /sbin/init on $1"; umount /sysroot; return 1
+}
+
+switch_to_rootfs() {
+	grep -q 'op9.noswitch' /proc/cmdline && { echo "op9-initramfs: op9.noswitch, staying"; return; }
+	if ! grep -q 'op9.root=super' /proc/cmdline; then
+		DEV=$(find_part userdata) && try_root "$DEV"
+	fi
+	find_part super >/dev/null || return
+	SUPER=$PART
+	DM=$(grep -v '^#' /etc/op9-linux.extents | while read s l o; do echo "$s $l linear $SUPER $o"; done | dmcreate linux) ||
+		{ echo "op9-initramfs: dmcreate failed"; return; }
+	echo "op9-initramfs: linux -> $DM (super $SUPER)"
+	try_root "$DM"
+}
+switch_to_rootfs
+dmesg > /tmp/dmesg-boot.txt
+while true; do sleep 3600; done
