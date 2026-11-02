@@ -23,6 +23,10 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 | Wi-Fi and Bluetooth | QCA6490 v1, driven as a WCN6855 in `ath11k` with trimmed firmware memory |
 | Speakers | 2x NXP TFA9874, I2C19 at `0x34` (top) and `0x35` (bottom) |
 | Codec | WCD9380 over SoundWire; phone mics are DMIC1 and DMIC3 |
+| Vibration | Awinic AW8697, I2C17 at `0x5a`, reset GPIO 75, 170 Hz motor |
+| Flash | PM8350C flash controller, channels 1 and 2 |
+| NFC | NXP SN100T, I2C15 at `0x28`, NCI 2.0; IRQ GPIO 87, enable GPIO 62, firmware GPIO 86 |
+| Fingerprint | Goodix optical G3S, behind a secure app; not supported |
 | Battery gauge | BQ28Z610, 2 cells in series |
 | Main camera | Sony IMX789, 3-trio C-PHY, AK7377 focus at `0x0c` |
 | Ultrawide | Sony IMX766, C-PHY, LC898229 focus at `0x72` |
@@ -46,5 +50,7 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 - **USB replug:** charger detection takes over DP/DM and leaves the PHY in a state that stops
   re-enumeration, so the PHY datapath has to be reclaimed.
 - **OTG:** the charger firmware keeps Type-C sink-only until the AP sets the OnePlus-specific properties.
+- **Bluetooth address:** the chip has none, so the kernel leaves the controller unconfigured and BlueZ
+  sees nothing. Set it with `local-bd-address`, or try it live with `btmgmt --index 0 public-addr`.
 - **Unsafe register access:** reading unclocked display or LPASS registers from Linux, for example
   through `/dev/mem`, hangs the phone. Only use `tools/regdump.c` if you know the clocks are on.

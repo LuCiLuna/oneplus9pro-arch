@@ -1,0 +1,37 @@
+From c9ac05a6a7cd7fd4218c3e19401ce336207b2bab Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 23:22:57 -0600
+Subject: [PATCH 112/114] arm64: dts: qcom: sm8350-oneplus: add the SN100T NFC
+ controller
+
+It speaks NCI 2.0 over I2C with the same framing as the PN7xx parts, so
+nxp-nci-i2c drives it. The controller reports NXP firmware 1.10.57. The driver
+only updates firmware when asked to, so nothing is written to the chip.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index f3a7b2ff93d..e7448179255 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -809,7 +809,16 @@ &i2c15 {
+ 	clock-frequency = <400000>;
+ 	status = "okay";
+ 
+-	/* sn-nci NFC controller @ 28 */
++	/* NXP SN100T: NCI 2.0 over I2C, the same transport as the PN7xx parts */
++	nfc@28 {
++		compatible = "nxp,nxp-nci-i2c";
++		reg = <0x28>;
++
++		interrupts-extended = <&tlmm 87 IRQ_TYPE_LEVEL_HIGH>;
++
++		enable-gpios = <&tlmm 62 GPIO_ACTIVE_HIGH>;
++		firmware-gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;
++	};
+ };
+ 
+ &gpi_dma0 {

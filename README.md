@@ -32,15 +32,18 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory scaling | ✅ | DDR, LLCC and L3 scale with load |
-| Bluetooth | 🟡 | The chip comes up; pairing and the interface aren't finished |
+| Bluetooth | ✅ | Pairing and music tested with a headset; each phone must set its own address |
+| Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
+| Flashlight | ✅ | Tested directly; the Phosh toggle is untested |
+| NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
 | Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
 | Firefox | 🟡 | Usable, but scrolling and interaction stutter |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | Earpiece, USB-C headset | ❌ | Not finished |
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
 | GPS | ❌ | Not working; probably depends on the modem |
-| Fingerprint, NFC | ❌ | No driver |
-| Vibration, flashlight, notification LED | ❌ | Not exposed yet |
+| Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
+| Notification LED | ❌ | Not exposed yet |
 
 More detail is in [docs/STATUS.md](docs/STATUS.md).
 
@@ -48,7 +51,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 110 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 114 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
@@ -57,7 +60,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 | [`docs/`](docs) | [Install guide](docs/INSTALL.md), [status](docs/STATUS.md) and [hardware notes](docs/HARDWARE.md) |
 
 **Firmware isn't included.** It's proprietary, so you copy it from your own phone. Sensor
-calibration and the Wi-Fi MAC address are specific to each phone, so those come from your phone too.
+calibration and the Wi-Fi and Bluetooth addresses are specific to each phone, so those come from your phone too.
 
 ## Getting started
 

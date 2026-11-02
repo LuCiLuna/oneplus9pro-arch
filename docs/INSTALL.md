@@ -34,14 +34,21 @@ Android is about to be wiped, so copy these now, as root:
 
 Don't share the last two or post them publicly. Also keep `vendor_boot.img` from your LineageOS build.
 
+Write down your **Bluetooth address** too. Android shows it under Settings → About phone. The chip
+has no address of its own, and stock reads it from the modem, which isn't running here. On the one
+phone tested, it was the Wi-Fi address minus 1, but that's a single example, so don't rely on it.
+
 ## 3. Build the kernel
 
 `wlan_mac.bin` contains a line like `Intf0MacAddress=AABBCCDDEEFF`. Pass that address, in lowercase
 pairs, so your phone uses its own. If you skip this, you get the firmware's placeholder address,
 which every phone without this setting shares.
 
+Do the same with your Bluetooth address, in the order Android shows it. Without it, BlueZ sees no
+Bluetooth adapter at all.
+
 ```sh
-WIFI_MAC="aa bb cc dd ee ff" kernel/build.sh work
+WIFI_MAC="aa bb cc dd ee ff" BT_ADDR="aa bb cc dd ee ff" kernel/build.sh work
 ```
 
 This produces `work/build/arch/arm64/boot/Image` and modules in `work/modroot`.
@@ -156,10 +163,10 @@ pacman-key --init && pacman-key --populate archlinuxarm
 pacman -Syu
 pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gnome-control-center \
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
-    libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros
+    libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd
 groupadd -r fastrpc
 chown -R fastrpc:fastrpc /usr/share/qcom/sm8350/OnePlus/lemonade/sensors/registry
-systemctl enable phosh NetworkManager touchboost rtc-offset rtc-offset-save.timer op9-boot-successful
+systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful
 systemctl set-default graphical.target
 ```
 

@@ -4,6 +4,7 @@
 #   kernel/build.sh [workdir]        default workdir: ./work
 #
 # WIFI_MAC="aa bb cc dd ee ff"   this phone's Wi-Fi address, see docs/INSTALL.md
+# BT_ADDR="aa bb cc dd ee ff"    this phone's Bluetooth address, in the normal order
 # KERNEL_GIT=<url>               where to fetch v7.3 from
 # JOBS=<n>                       parallel jobs
 set -euo pipefail
@@ -21,6 +22,13 @@ fi
 
 if [ -n "${WIFI_MAC:-}" ]; then
 	sed -i "s/local-mac-address = \[[0-9a-f ]*\];/local-mac-address = [$WIFI_MAC];/" \
+		"$SRC/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts"
+fi
+
+if [ -n "${BT_ADDR:-}" ]; then
+	# Device trees store this address in reverse
+	BT_LE=$(echo "$BT_ADDR" | tr ' ' '\n' | tac | tr '\n' ' ' | sed 's/ $//')
+	sed -i "s/local-bd-address = \[[0-9a-f ]*\];/local-bd-address = [$BT_LE];/" \
 		"$SRC/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts"
 fi
 

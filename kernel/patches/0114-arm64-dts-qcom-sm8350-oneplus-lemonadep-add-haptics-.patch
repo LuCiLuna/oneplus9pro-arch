@@ -1,0 +1,59 @@
+From 2598681d52ebfbbfee16c46c8b5d36f9a036be30 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 23:22:57 -0600
+Subject: [PATCH 114/114] arm64: dts: qcom: sm8350-oneplus-lemonadep: add
+ haptics and rear flash
+
+The flash uses channels 1 and 2 together, as the stock camera does. Torch
+current is limited to 400 mA in total and flash to 2 A, below the vendor limits.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 27 +++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index ab48881d991..19990a4306b 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -7,6 +7,7 @@
+ 
+ /dts-v1/;
+ 
++#include <dt-bindings/leds/common.h>
+ #include <dt-bindings/media/video-interfaces.h>
+ #include "sm8350-oneplus-common.dtsi"
+ 
+@@ -1137,6 +1138,32 @@ &bluetooth {
+ 	local-bd-address = [00 00 00 00 00 00];
+ };
+ 
++/* Rear flash: two channels driven together, as the stock camera does */
++&pm8350c_flash {
++	status = "okay";
++
++	led-0 {
++		function = LED_FUNCTION_FLASH;
++		color = <LED_COLOR_ID_WHITE>;
++		led-sources = <1>, <2>;
++		led-max-microamp = <400000>;
++		flash-max-microamp = <2000000>;
++		flash-max-timeout-us = <1280000>;
++	};
++};
++
++&i2c17 {
++	clock-frequency = <400000>;
++	status = "okay";
++
++	haptics@5a {
++		compatible = "awinic,aw8697";
++		reg = <0x5a>;
++
++		reset-gpios = <&tlmm 75 GPIO_ACTIVE_LOW>;
++	};
++};
++
+ /* pm8008i L1 only feeds the telephoto sensor core (DVDD, 1.2 V) */
+ &vreg_l1i {
+ 	regulator-min-microvolt = <1200000>;

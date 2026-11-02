@@ -2,8 +2,9 @@
 
 Tested on one T-Mobile LE2127 running kernel 7.3 with this patch series.
 
-Wi-Fi, sleep and video decoding were tested on the current kernel. The other features were
-tested on earlier builds of the series and haven't been rerun since memory scaling was added.
+Wi-Fi, sleep, video decoding, Bluetooth, vibration, the flashlight and NFC card detection were
+tested after memory scaling was added. The other features were tested on earlier builds of the
+series and haven't been rerun since.
 
 ## Numbers
 
@@ -29,12 +30,20 @@ tested on earlier builds of the series and haven't been rerun since memory scali
   crash recovery. Either can hang shutdown, so reboot instead.
 - **Clock:** the PMIC real-time clock is read-only, so `rtc-offset` stores an offset in a file.
 
+## Fingerprint reader
+
+The under-display Goodix sensor doesn't appear to be something Linux can drive directly. On stock,
+a 13 MB Qualcomm secure app (`goodixfp`) runs in the Trusted Execution Environment, and Android's
+closed libraries reach it through `QSEECom_start_app`, then sync the display's bright flash with
+each scan. Supporting it would need kernel support for loading and serving secure apps, a way to
+run the Android libraries, display sync and a bridge to `fprintd`. That app may also refuse to run
+on an unlocked phone. It hasn't been attempted.
+
 ## Next
 
-1. Finish Bluetooth
-2. Fix Firefox stutter
-3. Improve camera quality and check video recording
-4. Add vibration and the flashlight
-5. Reach deeper sleep, including cutting touch power
-6. Add the fingerprint reader, earpiece, USB-C headset and speaker protection
-7. Bring up the modem
+1. Fix Firefox stutter
+2. Improve camera quality and check video recording
+3. Reach deeper sleep, including cutting touch power
+4. Add the earpiece, USB-C headset and speaker protection
+5. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+6. Bring up the modem
