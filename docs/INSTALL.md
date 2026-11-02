@@ -224,6 +224,29 @@ Then put `firefox/firefox.desktop` in `~/.local/share/applications/` and `firefo
 Firefox profile. The library must match Arch's FFmpeg version, so a major FFmpeg update can drop
 Firefox back to software decoding until you rebuild it.
 
+## 10. Firefox phone layout
+
+[`mobile-config-firefox`](https://gitlab.postmarketos.org/postmarketOS/mobile-config-firefox) from
+postmarketOS gives Firefox a phone interface and asks sites for their mobile versions. It isn't in
+the Arch Linux ARM repos, so take the files from Alpine's package. Check
+[Alpine's package page](https://pkgs.alpinelinux.org/package/edge/community/aarch64/mobile-config-firefox)
+for the current version; this was tested with 5.5.2 on Firefox 159.
+
+```sh
+curl -LO https://dl-cdn.alpinelinux.org/alpine/edge/community/aarch64/mobile-config-firefox-5.5.2-r0.apk
+mkdir mcf && tar -xzf mobile-config-firefox-5.5.2-r0.apk -C mcf
+```
+
+On the phone, copy these from `mcf/usr/lib/` into the same place under `/usr/lib/`:
+
+- `mobile-config-firefox/`
+- `firefox/mobile-config-autoconfig.js`
+- `firefox/defaults/pref/mobile-config-prefs.js`
+
+The package also has `firefox/distribution/policies.json`, which is optional and was left out here.
+It changes the default search engine to DuckDuckGo, removes other search engines and installs
+uBlock Origin. To undo the layout, delete the three items above and restart Firefox.
+
 ## How this phone got here
 
 The phone first ran Linux from a `linux` logical partition inside `super`, was built up over USB,

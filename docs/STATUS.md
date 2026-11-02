@@ -13,6 +13,7 @@ series and haven't been rerun since.
 | Memory copy, prime core | About 17 GB/s, 142 ns latency |
 | 4K60 VP9 in Firefox, on battery | 5 runs of about 2 minutes: 0 firmware rejections |
 | Dropped frames in those runs | 158–321 of about 7,000, mostly in the first 45 seconds |
+| 4K60 VP9 on YouTube's mobile site | 32 dropped of 2,145 in the player's own stats |
 | Firefox scrolling test, 30 s of a heavy page | 116 fps, up from 109–114; stalls over 100 ms 0–1, down from 1–6 |
 | Sleep (s2idle) | About 40–44 mA, roughly 1.5 days of standby (estimate) |
 | USB 3 flash drive | 94.5 MB/s read |
@@ -31,6 +32,8 @@ series and haven't been rerun since.
   53 mA instead of about 40.
 - **Charging notification:** Phosh lets any notification be swiped away, so it comes back silently
   within 5 seconds.
+- **YouTube in Firefox:** the mobile page clips its left edge at the default zoom. Zooming that site
+  to 80% fixes it. The cause wasn't measured. Wikipedia, BBC News and a test page fit correctly.
 - **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
   and a USB 3 OTG adapter both work.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
@@ -54,6 +57,5 @@ been attempted on Linux.
 1. Improve camera quality and check video recording
 2. Reach deeper sleep, including cutting touch power
 3. Add the earpiece, USB-C headset and speaker protection
-4. Use a phone-friendly Firefox interface
-5. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
-6. Bring up the modem
+4. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+5. Bring up the modem

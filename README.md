@@ -41,7 +41,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Flashlight | ✅ | Quick settings toggle with adjustable brightness |
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
 | Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
-| Firefox | ✅ | Smooth after the scheduler fix; it's still the desktop interface on a small screen |
+| Firefox | ✅ | Phone layout with mobile sites, using `mobile-config-firefox`; smooth after the scheduler fix. YouTube's mobile page clips its left edge unless zoomed to 80% |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | Earpiece, USB-C headset | ❌ | Not finished |
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
@@ -58,7 +58,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
-| [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding |
+| [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding, and its settings |
 | [`tools/`](tools) | Source for helper tools |
 | [`docs/`](docs) | [Install guide](docs/INSTALL.md), [status](docs/STATUS.md) and [hardware notes](docs/HARDWARE.md) |
 
