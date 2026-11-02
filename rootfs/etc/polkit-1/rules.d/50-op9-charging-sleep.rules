@@ -1,0 +1,6 @@
+// While charging, charge-status blocks sleep. Refuse overrides outright, so that the idle timer's
+// request doesn't ask for a password on the phone.
+polkit.addRule(function(action, subject) {
+	if (action.id == "org.freedesktop.login1.suspend-ignore-inhibit")
+		return polkit.Result.NO;
+});

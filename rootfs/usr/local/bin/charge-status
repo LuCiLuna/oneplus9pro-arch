@@ -5,6 +5,20 @@ W=/sys/class/power_supply/qcom-battmgr-wls
 U=/sys/class/power_supply/qcom-battmgr-usb
 B=/sys/class/power_supply/bq28z610-0
 id=0
+inhibitor=
+
+# The kernel refuses to sleep on a charger, but a failed attempt still drops Wi-Fi: don't try.
+inhibit() {
+	[ -n "$inhibitor" ] && return
+	systemd-inhibit --what=sleep --mode=block --who="Charging" --why="Keeping the battery limits running" \
+		sleep infinity &
+	inhibitor=$!
+}
+
+release() {
+	[ -n "$inhibitor" ] && pkill -P "$inhibitor" -x sleep
+	inhibitor=
+}
 
 # microvolts and microamps to watts, with one decimal
 watts() { awk -v v="$1" -v i="$2" 'BEGIN { printf "%.1f", v * i / 1e12 }'; }
@@ -26,6 +40,7 @@ update() {
 		title="Wireless"
 		input=$(watts "$(cat $W/voltage_now)" "$(cat $W/current_now)")
 	else
+		release
 		if [ "$id" != 0 ]; then
 			gdbus call --session --dest org.freedesktop.Notifications \
 				--object-path /org/freedesktop/Notifications \
@@ -34,6 +49,7 @@ update() {
 		fi
 		return 1
 	fi
+	inhibit
 	bat=$(watts "$(cat $B/voltage_now)" "$(cat $B/current_now)")
 	if [ "$id" = 0 ]; then
 		category=device.added
@@ -45,6 +61,8 @@ update() {
 		-h "string:x-phosh-fb-profile:$profile" \
 		"$title $input W · battery $bat W" "Battery at $(cat $B/capacity)%")
 }
+
+trap release EXIT
 
 # power supply events report the charger coming and going; refresh while charging
 while :; do

@@ -26,9 +26,9 @@ series and haven't been rerun since.
 - **Wireless charging:** the temperature limits haven't been seen to trigger on wireless, since the
   phone stayed under 38 °C. They use the same code as USB. Using OTG while on a wireless charger isn't
   handled. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
-- **After charging:** the phone doesn't sleep while a charger is attached. It hasn't been checked
-  whether idle sleep restarts by itself after the charger comes off; if it doesn't, the phone stays
-  awake with the screen off, at about 53 mA, until it's next used.
+- **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
+  fired during that time, the phone stays awake with the screen off until it's next used, at about
+  53 mA instead of about 40.
 - **Charging notification:** Phosh lets any notification be swiped away, so it comes back silently
   within 5 seconds.
 - **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
