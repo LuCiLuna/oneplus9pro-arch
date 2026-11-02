@@ -3,7 +3,7 @@
 Native Arch Linux ARM on the OnePlus 9 Pro (`lemonadep`, Snapdragon 888 / SM8350) with a
 mainline Linux 7.3 kernel, the Phosh phone interface and no Android underneath.
 
-This is working on one real phone every day. It isn't a polished distribution yet: there's no
+This runs on one real phone. It isn't a polished distribution yet: there's no
 installer or prebuilt image, and installing it means building a kernel and wiping the phone.
 
 ## ⚠️ Read this first
@@ -28,14 +28,16 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter; some docks don't work |
 | Charging | ✅ | USB-C PD, about 25 W; stops near 95% by choice |
+| Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Wake the phone after placing it, and don't leave it unattended while asleep |
 | Speakers and mics | ✅ | No speaker protection yet, so avoid long periods at full volume |
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
-| Bluetooth | ✅ | Pairing and music tested with a headset; each phone must set its own address |
+| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; each phone must set its own address |
+| Buttons | ✅ | Power, volume up and volume down |
 | Alert slider | ✅ | Top silent, middle vibrate, bottom ring |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
-| Flashlight | ✅ | Tested directly; the Phosh toggle is untested |
+| Flashlight | ✅ | Quick settings toggle with adjustable brightness |
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
 | Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
 | Firefox | ✅ | Smooth after the scheduler fix; it's still the desktop interface on a small screen |
@@ -44,7 +46,6 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
 | GPS | ❌ | Not working; probably depends on the modem |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
-| Notification LED | ❌ | Not exposed yet |
 
 More detail is in [docs/STATUS.md](docs/STATUS.md).
 
@@ -52,7 +53,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 116 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 117 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |

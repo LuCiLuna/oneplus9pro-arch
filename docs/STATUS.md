@@ -2,8 +2,8 @@
 
 Tested on one T-Mobile LE2127 running kernel 7.3 with this patch series.
 
-Wi-Fi, sleep, video decoding, Bluetooth, vibration, the flashlight and NFC card detection were
-tested after memory scaling was added. The other features were tested on earlier builds of the
+Wi-Fi, sleep, video decoding, Bluetooth, vibration, the flashlight, NFC card detection, the buttons,
+the alert slider and wireless charging were tested after memory scaling was added. The other features were tested on earlier builds of the
 series and haven't been rerun since.
 
 ## Numbers
@@ -17,11 +17,16 @@ series and haven't been rerun since.
 | Sleep (s2idle) | About 40–44 mA, roughly 1.5 days of standby (estimate) |
 | USB 3 flash drive | 94.5 MB/s read |
 | Charging | 8.84 V at up to 2.77 A on a 25 W charger |
+| Wireless charging, from a Galaxy S26 Ultra's reverse charging | About 2.2 W in; up to +97 mA at the battery with the phone idle |
 
 ## Known problems
 
 - **Sleep:** the chip doesn't reach its deepest sleep state, and "deep" suspend wakes by itself, so
   `s2idle` is used.
+- **Wireless charging:** placing the phone on a charger while it's asleep doesn't wake it, and it
+  seemed not to charge until woken (one test). The temperature limits run on the phone's processor, so
+  they don't run during sleep. They also haven't been seen to trigger on wireless, since the phone
+  stayed under 34 °C. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
 - **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
   and a USB 3 OTG adapter both work.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
@@ -44,6 +49,8 @@ been attempted on Linux.
 
 1. Improve camera quality and check video recording
 2. Reach deeper sleep, including cutting touch power
-3. Add the earpiece, USB-C headset and speaker protection
-4. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
-5. Bring up the modem
+3. Wake the phone when it's placed on a wireless charger
+4. Add the earpiece, USB-C headset and speaker protection
+5. Use a phone-friendly Firefox interface
+6. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+7. Bring up the modem
