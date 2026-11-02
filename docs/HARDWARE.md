@@ -40,6 +40,9 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 - **Memory scaling:** mainline `sm8350.dtsi` had no bandwidth monitors, no CPU or L3 votes, and no GPU
   memory path, so DDR stayed slow under load (3–4 GB/s memcpy). 4K60 video then made the video
   firmware time out while parsing VP9 headers.
+- **CPU capacity:** `sm8350.dtsi` had no `capacity-dmips-mhz`, so every core reported the same capacity
+  and browser work landed on A55s by chance. Energy-aware scheduling then made scrolling worse, so
+  `rootfs/etc/sysctl.d/90-op9-sched.conf` turns it off.
 - **Firmware log:** gen1 Iris firmware reports useful errors if you send `HFI_PROPERTY_SYS_DEBUG_CONFIG`.
   That's what exposed the VP9 timeout.
 - **Display flashes:** in command mode with autorefresh, `CTL_START` never fires, so flip events

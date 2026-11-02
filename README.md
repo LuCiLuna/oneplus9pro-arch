@@ -31,13 +31,13 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Speakers and mics | ✅ | No speaker protection yet, so avoid long periods at full volume |
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
-| Memory scaling | ✅ | DDR, LLCC and L3 scale with load |
+| Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
 | Bluetooth | ✅ | Pairing and music tested with a headset; each phone must set its own address |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
 | Flashlight | ✅ | Tested directly; the Phosh toggle is untested |
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
 | Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
-| Firefox | 🟡 | Usable, but scrolling and interaction stutter |
+| Firefox | ✅ | Smooth after the scheduler fix; it's still the desktop interface on a small screen |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | Earpiece, USB-C headset | ❌ | Not finished |
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
@@ -51,7 +51,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 114 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 115 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
