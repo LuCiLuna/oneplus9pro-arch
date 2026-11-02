@@ -29,7 +29,7 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 | NFC | NXP SN100T, I2C15 at `0x28`, NCI 2.0; IRQ GPIO 87, enable GPIO 62, firmware GPIO 86 |
 | Fingerprint | Goodix optical G3S, behind a secure app; not supported |
 | Battery gauge | BQ28Z610, 2 cells in series |
-| Wireless charging | IDT P9415 receiver at `0x3b` and HL7227 charge pump at `0x51`, on the I2C at `0x980000`; no drivers, the charger firmware handles basic power |
+| Wireless charging | IDT P9415 receiver at `0x3b` and HL7227 charge pump at `0x51`, on the I2C at `0x980000`; no drivers, the charger firmware handles basic power. PM8350C GPIO 2 turns the receiver off when high: the bootloader sets it if USB is attached at boot, and the battery driver keeps it off while USB is attached |
 | Main camera | Sony IMX789, 3-trio C-PHY, AK7377 focus at `0x0c` |
 | Ultrawide | Sony IMX766, C-PHY, LC898229 focus at `0x72` |
 | Telephoto | OmniVision OV08A10, 2-lane D-PHY, AK7377 focus at `0x0f` |

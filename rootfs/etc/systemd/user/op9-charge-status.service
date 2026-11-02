@@ -1,0 +1,11 @@
+[Unit]
+Description=Charging type and speed notification
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/charge-status
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

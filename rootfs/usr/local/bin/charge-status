@@ -1,0 +1,55 @@
+#!/bin/bash
+# Shows the charging type and speed in a notification. The lock screen only shows its title, and
+# Phosh lights the screen for the category of the first one (wakeup-screen-categories).
+W=/sys/class/power_supply/qcom-battmgr-wls
+U=/sys/class/power_supply/qcom-battmgr-usb
+B=/sys/class/power_supply/bq28z610-0
+id=0
+
+# microvolts and microamps to watts, with one decimal
+watts() { awk -v v="$1" -v i="$2" 'BEGIN { printf "%.1f", v * i / 1e12 }'; }
+
+usb_name() {
+	case $(grep -o '\[[^]]*\]' "$U/usb_type") in
+	'[PD]'|'[PD_DRP]'|'[PD_PPS]') echo "USB-C PD" ;;
+	'[SDP]') echo "USB" ;;
+	*) echo "Wired" ;;
+	esac
+}
+
+update() {
+	local title input bat category=device profile=none
+	if [ "$(cat $U/online)" = 1 ]; then
+		title=$(usb_name)
+		input=$(watts "$(cat $U/voltage_now)" "$(cat $U/current_now)")
+	elif [ "$(cat $W/online)" = 1 ]; then
+		title="Wireless"
+		input=$(watts "$(cat $W/voltage_now)" "$(cat $W/current_now)")
+	else
+		if [ "$id" != 0 ]; then
+			gdbus call --session --dest org.freedesktop.Notifications \
+				--object-path /org/freedesktop/Notifications \
+				--method org.freedesktop.Notifications.CloseNotification "$id" >/dev/null
+			id=0
+		fi
+		return 1
+	fi
+	bat=$(watts "$(cat $B/voltage_now)" "$(cat $B/current_now)")
+	if [ "$id" = 0 ]; then
+		category=device.added
+		profile=silent
+		fbcli -E notification-new-generic -w 1 >/dev/null 2>&1 &
+	fi
+	id=$(notify-send -p -r "$id" -u low -c "$category" -t 0 -i battery-full-charging-symbolic \
+		-a Charging -h string:desktop-entry:op9-charge-status \
+		-h "string:x-phosh-fb-profile:$profile" \
+		"$title $input W · battery $bat W" "Battery at $(cat $B/capacity)%")
+}
+
+# power supply events report the charger coming and going; refresh while charging
+while :; do
+	if update; then timeout=5; else timeout=3600; fi
+	read -r -t "$timeout" _
+	rc=$?
+	[ "$rc" = 0 ] || [ "$rc" -gt 128 ] || exit 1
+done < <(exec udevadm monitor --kernel --subsystem-match=power_supply)

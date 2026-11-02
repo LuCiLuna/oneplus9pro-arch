@@ -23,10 +23,14 @@ series and haven't been rerun since.
 
 - **Sleep:** the chip doesn't reach its deepest sleep state, and "deep" suspend wakes by itself, so
   `s2idle` is used.
-- **Wireless charging:** placing the phone on a charger while it's asleep doesn't wake it, and it
-  seemed not to charge until woken (one test). The temperature limits run on the phone's processor, so
-  they don't run during sleep. They also haven't been seen to trigger on wireless, since the phone
-  stayed under 34 °C. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
+- **Wireless charging:** the temperature limits haven't been seen to trigger on wireless, since the
+  phone stayed under 38 °C. They use the same code as USB. Using OTG while on a wireless charger isn't
+  handled. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
+- **After charging:** the phone doesn't sleep while a charger is attached. It hasn't been checked
+  whether idle sleep restarts by itself after the charger comes off; if it doesn't, the phone stays
+  awake with the screen off, at about 53 mA, until it's next used.
+- **Charging notification:** Phosh lets any notification be swiped away, so it comes back silently
+  within 5 seconds.
 - **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
   and a USB 3 OTG adapter both work.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
@@ -49,8 +53,7 @@ been attempted on Linux.
 
 1. Improve camera quality and check video recording
 2. Reach deeper sleep, including cutting touch power
-3. Wake the phone when it's placed on a wireless charger
-4. Add the earpiece, USB-C headset and speaker protection
-5. Use a phone-friendly Firefox interface
-6. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
-7. Bring up the modem
+3. Add the earpiece, USB-C headset and speaker protection
+4. Use a phone-friendly Firefox interface
+5. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+6. Bring up the modem

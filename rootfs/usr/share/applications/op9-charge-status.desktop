@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Charging status
+Exec=/usr/local/bin/charge-status
+Icon=battery-full-charging-symbolic
+NoDisplay=true
+X-GNOME-UsesNotifications=true

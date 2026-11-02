@@ -163,7 +163,8 @@ pacman-key --init && pacman-key --populate archlinuxarm
 pacman -Syu
 pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gnome-control-center \
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
-    libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd
+    libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
+    libnotify
 groupadd -r fastrpc
 chown -R fastrpc:fastrpc /usr/share/qcom/sm8350/OnePlus/lemonade/sensors/registry
 systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful
@@ -179,10 +180,18 @@ aarch64-linux-gnu-gcc -static -O2 -o op9-slot tools/op9-slot.c
 aarch64-linux-gnu-gcc -static -O2 -o alert-slider tools/alert-slider.c
 ```
 
-Then, logged in as `alarm`, turn on the alert slider:
+Then, logged in as `alarm`, turn on the alert slider and the charging notification. The `gsettings`
+lines stop that notification popping up on the home screen, and let it light the screen when
+charging starts:
 
 ```sh
-systemctl --user enable --now op9-alert-slider
+systemctl --user enable --now op9-alert-slider op9-charge-status
+app=org.gnome.desktop.notifications.application:/org/gnome/desktop/notifications/application/op9-charge-status/
+gsettings set $app application-id op9-charge-status.desktop
+gsettings set $app show-banners false
+gsettings set org.gnome.desktop.notifications application-children "['op9-charge-status']"
+gsettings set sm.puri.phosh.notifications wakeup-screen-triggers "['urgency','category']"
+gsettings set sm.puri.phosh.notifications wakeup-screen-categories "['device.added']"
 ```
 
 ## 8. Patched packages
