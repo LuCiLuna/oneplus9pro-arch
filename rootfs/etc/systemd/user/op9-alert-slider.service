@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply the alert slider to feedback settings
+
+[Service]
+ExecStart=/usr/local/bin/alert-slider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

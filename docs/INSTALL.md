@@ -170,12 +170,19 @@ systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset
 systemctl set-default graphical.target
 ```
 
-`tools/` has source for `touchboost` and `op9-slot`, which those services run. Cross-compile them
-statically and put them in `/usr/local/bin`:
+`tools/` has source for `touchboost`, `op9-slot` and `alert-slider`, which those services run.
+Cross-compile them statically and put them in `/usr/local/bin`:
 
 ```sh
 aarch64-linux-gnu-gcc -static -O2 -o touchboost tools/touchboost.c
 aarch64-linux-gnu-gcc -static -O2 -o op9-slot tools/op9-slot.c
+aarch64-linux-gnu-gcc -static -O2 -o alert-slider tools/alert-slider.c
+```
+
+Then, logged in as `alarm`, turn on the alert slider:
+
+```sh
+systemctl --user enable --now op9-alert-slider
 ```
 
 ## 8. Patched packages

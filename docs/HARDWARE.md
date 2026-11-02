@@ -23,6 +23,7 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 | Wi-Fi and Bluetooth | QCA6490 v1, driven as a WCN6855 in `ath11k` with trimmed firmware memory |
 | Speakers | 2x NXP TFA9874, I2C19 at `0x34` (top) and `0x35` (bottom) |
 | Codec | WCD9380 over SoundWire; phone mics are DMIC1 and DMIC3 |
+| Alert slider | 2x IST8801 hall sensors, I2C15 at `0x19` (up) and `0x18` (down), IRQ GPIOs 50 and 51 |
 | Vibration | Awinic AW8697, I2C17 at `0x5a`, reset GPIO 75, 170 Hz motor |
 | Flash | PM8350C flash controller, channels 1 and 2 |
 | NFC | NXP SN100T, I2C15 at `0x28`, NCI 2.0; IRQ GPIO 87, enable GPIO 62, firmware GPIO 86 |

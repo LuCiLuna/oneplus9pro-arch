@@ -33,6 +33,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
 | Bluetooth | ✅ | Pairing and music tested with a headset; each phone must set its own address |
+| Alert slider | ✅ | Top silent, middle vibrate, bottom ring |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
 | Flashlight | ✅ | Tested directly; the Phosh toggle is untested |
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
@@ -51,7 +52,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 115 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 116 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
