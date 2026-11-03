@@ -1,0 +1,138 @@
+From d9c96930fac7463e596d8acf3ef985f4ba1d533f Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 01:32:04 -0600
+Subject: [PATCH] shared-qmi: register as LOC master client before starting the
+ GPS engine
+
+Recent Qualcomm modems (seen on SM8350) answer the LOC Start request
+with GeneralError until a control point registers as the master client,
+which Android's location HAL does first with a fixed key. Send the
+registration (message 0x00BA, key 0xBAABCDEF) before starting the
+session; failures, including an already registered master, are logged
+and ignored.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/mm-shared-qmi.c | 102 ++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 88 insertions(+), 14 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index 4fd92cb0..9ac0a49e 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -5674,6 +5674,93 @@ loc_start_ready (QmiClientLoc *client,
+     qmi_message_loc_register_events_input_unref (input);
+ }
+ 
++/* Qualcomm LOC services on recent modems (e.g. SM8350) refuse to start a
++ * session with a GeneralError until a control point registers as the "master
++ * client", which Android's location HAL does first with this fixed key. libqmi
++ * has no helper for it, so send the raw message. */
++#define QMI_LOC_REGISTER_MASTER_CLIENT 0x00BA
++#define QMI_LOC_MASTER_CLIENT_KEY      0xBAABCDEF
++
++static void
++loc_send_start (QmiClientLoc *client,
++                GTask        *task)
++{
++    QmiMessageLocStartInput *input;
++
++    input = qmi_message_loc_start_input_new ();
++    qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
++    qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
++    qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
++    qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
++    qmi_client_loc_start (client,
++                          input,
++                          10,
++                          NULL,
++                          (GAsyncReadyCallback) loc_start_ready,
++                          task);
++    qmi_message_loc_start_input_unref (input);
++}
++
++static void
++loc_register_master_client_ready (QmiDevice    *device,
++                                  GAsyncResult *res,
++                                  GTask        *task)
++{
++    QmiClientLoc *client;
++    QmiMessage   *response;
++    GError       *error = NULL;
++
++    client = QMI_CLIENT_LOC (g_task_get_task_data (task));
++    response = qmi_device_command_full_finish (device, res, &error);
++    if (!response) {
++        mm_obj_dbg (g_task_get_source_object (task), "couldn't register as LOC master client: %s", error->message);
++        g_error_free (error);
++    } else {
++        const guint8 *result;
++        guint16       length = 0;
++
++        /* Result TLV: 16-bit status, 16-bit error. Already registered is fine. */
++        result = qmi_message_get_raw_tlv (response, 0x02, &length);
++        if (result && length >= 4)
++            mm_obj_dbg (g_task_get_source_object (task), "LOC master client registration: status %u, error %u",
++                        result[0] | (result[1] << 8), result[2] | (result[3] << 8));
++        qmi_message_unref (response);
++    }
++    loc_send_start (client, task);
++}
++
++static void
++loc_register_master_client (QmiClientLoc *client,
++                            GTask        *task)
++{
++    g_autoptr(QmiMessage)        message = NULL;
++    g_autoptr(QmiMessageContext) context = NULL;
++    gsize                        init_offset;
++    GError                      *error = NULL;
++
++    message = qmi_message_new (QMI_SERVICE_LOC,
++                               qmi_client_get_cid (QMI_CLIENT (client)),
++                               qmi_client_get_next_transaction_id (QMI_CLIENT (client)),
++                               QMI_LOC_REGISTER_MASTER_CLIENT);
++    if (!(init_offset = qmi_message_tlv_write_init (message, 0x01, &error)) ||
++        !qmi_message_tlv_write_guint32 (message, QMI_ENDIAN_LITTLE, QMI_LOC_MASTER_CLIENT_KEY, &error) ||
++        !qmi_message_tlv_write_complete (message, init_offset, &error)) {
++        mm_obj_dbg (g_task_get_source_object (task), "couldn't build LOC master client request: %s", error->message);
++        g_error_free (error);
++        loc_send_start (client, task);
++        return;
++    }
++    context = qmi_message_context_new ();
++    g_task_set_task_data (task, g_object_ref (client), g_object_unref);
++    qmi_device_command_full (QMI_DEVICE (qmi_client_peek_device (QMI_CLIENT (client))),
++                             message,
++                             context,
++                             10,
++                             NULL,
++                             (GAsyncReadyCallback) loc_register_master_client_ready,
++                             task);
++}
++
+ static void
+ start_gps_engine (MMSharedQmi         *self,
+                   GAsyncReadyCallback  callback,
+@@ -5711,20 +5798,7 @@ start_gps_engine (MMSharedQmi         *self,
+                                         MM_PORT_QMI_FLAG_DEFAULT,
+                                         NULL);
+     if (client) {
+-        QmiMessageLocStartInput *input;
+-
+-        input = qmi_message_loc_start_input_new ();
+-        qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
+-        qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
+-        qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
+-        qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
+-        qmi_client_loc_start (QMI_CLIENT_LOC (client),
+-                              input,
+-                              10,
+-                              NULL,
+-                              (GAsyncReadyCallback) loc_start_ready,
+-                              task);
+-        qmi_message_loc_start_input_unref (input);
++        loc_register_master_client (QMI_CLIENT_LOC (client), task);
+         return;
+     }
+ 

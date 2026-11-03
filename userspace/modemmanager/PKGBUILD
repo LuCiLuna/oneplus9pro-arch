@@ -1,7 +1,10 @@
 # Arch's modemmanager 1.24.2 plus two upstream fixes that stop it crashing on this
 # phone's multiplexed QMI data link: reconnecting mobile data crashed it (netlink
 # use-after-free), and so did stopping it with data connected (bearer count assert).
-# pkgrel 2.1 sits just above Arch's 1.24.2-2, so the next Arch release replaces it.
+# Our own patch makes GPS start: the LOC service wants a master client first.
+# pkgrel 2.x sits just above Arch's 1.24.2-2, so the next Arch release replaces this
+# package. The crash fixes are upstream, but the GPS patch isn't yet: rebuild this
+# PKGBUILD on the new version when that happens.
 # Based on https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Contributor: Ionut Biru <ibiru@archlinux.org>
@@ -12,7 +15,7 @@ pkgname=(
   libmm-glib
 )
 pkgver=1.24.2
-pkgrel=2.1
+pkgrel=2.2
 pkgdesc="Mobile broadband modem management service"
 url="https://www.freedesktop.org/wiki/Software/ModemManager/"
 arch=(aarch64)
@@ -50,8 +53,9 @@ checkdepends=(
 )
 source=(
   "git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git#tag=${pkgver/[a-z]/-&}"
+  0001-shared-qmi-register-as-LOC-master-client-before-star.patch
 )
-b2sums=('SKIP')
+b2sums=('SKIP' 'SKIP')
 validpgpkeys=(
   A814D09B9C5BC01945A64308AECE0239C6606AD5 # Aleksander Morgado <aleksandermj@chromium.org>
   3A948E16E8860C68CD68441D734614319E26A433 # Dan Williams <dan@ioncontrol.co>
@@ -68,6 +72,9 @@ prepare() {
   git cherry-pick -n 9317cbc4
   # base-manager: fix cleanup of multiplexed bearers
   git cherry-pick -n 0edcb916
+
+  # GPS on SM8350: register as LOC master client before starting the engine
+  patch -Np1 < ../0001-shared-qmi-register-as-LOC-master-client-before-star.patch
 }
 
 build() {
