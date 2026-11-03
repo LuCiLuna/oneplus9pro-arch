@@ -1,0 +1,127 @@
+From 962aec167f7ec3443bd9e08ddd39d46d514f1184 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 09:42:11 +0000
+Subject: [PATCH 090/114] arm64: dts: qcom: sm8350-oneplus: enable USB3 PHY and
+ DisplayPort alt mode
+
+Wire the QMP USB3/DP combo PHY into the Type-C graph: pmic_glink's
+connector gets the SuperSpeed endpoint, the PHY is enabled with the
+supplies the vendor DT uses (L1B 0.912 V, L6B 1.2 V) and acts as both
+orientation switch and mode mux, and dwc3 uses it as its usb3-phy instead
+of running UTMI-only.
+
+The charger firmware reports orientation and DP alt mode over
+pmic_glink's USBC_PAN channel, which the upstream altmode driver already
+handles. Tested: DP-only pin assignment C through a USB-C to HDMI adapter
+drives a 1080p60 TV as a second output.
+
+dwc3 is limited to SuperSpeed (Gen 1) like downstream; doing so makes
+dwc3 set LLUCTL.FORCE_GEN1 at 0xd024, so map the core registers up to
+0xd100. SuperSpeed link training with the one USB3+DP dock tried still
+stalls in Polling; USB2 keeps working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm8350-oneplus-common.dtsi  | 46 +++++++++++++------
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     |  5 ++
+ 2 files changed, 36 insertions(+), 15 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index 0788182a725..c40f6155a33 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -128,7 +128,13 @@ pmic_glink_hs_in: endpoint {
+ 					};
+ 				};
+ 
+-				/* USB3 not working, so no port@1 */
++				port@1 {
++					reg = <1>;
++
++					pmic_glink_ss_in: endpoint {
++						remote-endpoint = <&usb_1_qmpphy_out>;
++					};
++				};
+ 
+ 				port@2 {
+ 					reg = <2>;
+@@ -831,15 +837,11 @@ &mdss {
+ 
+ &mdss_dp {
+ 	//status = "okay";
++};
+ 
+-	ports {
+-		port@1 {
+-			reg = <1>;
+-
+-			endpoint {
+-			};
+-		};
+-	};
++&mdss_dp_out {
++	/* 4 lanes in DP-only pin assignments, 2 when USB3 shares the plug */
++	data-lanes = <0 1 2 3>;
+ };
+ 
+ &mdss_dsi0 {
+@@ -1504,23 +1506,37 @@ &usb_1 {
+ 	/delete-property/ interconnects;
+ 	/delete-property/ interconnect-names;
+ 
+-	/* USB3 seems broken (though it's enabled downstream?) */
+-	qcom,select-utmi-as-pipe-clk;
+-
+ 	status = "okay";
+ };
+ 
+ &usb_1_dwc3 {
+ 	dr_mode = "otg";
+-	maximum-speed = "high-speed";
+-	phys = <&usb_1_hsphy>;
+-	phy-names = "usb2-phy";
++	/*
++	 * The QMP USB3/DP PHY is Gen 1 only; SuperSpeed Plus link training
++	 * stalls in Polling. On this DWC_usb31 core dwc3 then sets
++	 * LLUCTL.FORCE_GEN1 at 0xd024, beyond the 0xcd00 the SoC dtsi maps.
++	 */
++	reg = <0 0x0a600000 0 0xd100>;
++	maximum-speed = "super-speed";
+ };
+ 
+ &usb_1_dwc3_hs {
+ 	remote-endpoint = <&pmic_glink_hs_in>;
+ };
+ 
++&usb_1_qmpphy {
++	vdda-phy-supply = <&pm8350_l1>;
++	vdda-pll-supply = <&pm8350_l6>;
++
++	mode-switch;
++
++	status = "okay";
++};
++
++&usb_1_qmpphy_out {
++	remote-endpoint = <&pmic_glink_ss_in>;
++};
++
+ &usb_1_hsphy {
+ 	vdda-pll-supply = <&pm8350_l5>;
+ 	vdda18-supply = <&pm8350c_l1>;
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 3111cf0046e..f64bbf847e1 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -761,6 +761,11 @@ &mdss {
+ 	status = "okay";
+ };
+ 
++/* DisplayPort alt mode over USB-C */
++&mdss_dp {
++	status = "okay";
++};
++
+ &mdss_dsi0 {
+ 	status = "okay";
+ };

@@ -1,0 +1,485 @@
+From 892eb1557b14c3cb17ca910d6f13bbff31929710 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:09:14 +0000
+Subject: [PATCH 026/114] ASoC: codecs: add NXP TFA9874 amplifier driver
+
+The TFA9874 has no on-chip DSP (speaker protection runs on the host DSP),
+so it only needs its registers programmed: the NXP "optimal settings" for
+the silicon revision, the board's container settings, TDM slot layout for
+the stream, then power up once the PLL has locked to BCK.
+
+Settings are taken from the NXP tfa98xx driver and the OnePlus 9 Pro
+tfa98xx.cnt "speaker" profile. No speaker protection or volume control yet.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sound/soc/codecs/Kconfig   |   8 +
+ sound/soc/codecs/Makefile  |   2 +
+ sound/soc/codecs/tfa9874.c | 419 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 429 insertions(+)
+ create mode 100644 sound/soc/codecs/tfa9874.c
+
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 8e251e1d84b..58a41b1467d 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -2297,6 +2297,14 @@ config SND_SOC_TFA9879
+ 	tristate "NXP Semiconductors TFA9879 amplifier"
+ 	depends on I2C
+ 
++config SND_SOC_TFA9874
++	tristate "NXP TFA9874 amplifier"
++	depends on I2C
++	select REGMAP_I2C
++	help
++	  Enable support for the NXP TFA9874 smart amplifier, which has no
++	  on-chip DSP and is configured over I2C only.
++
+ config SND_SOC_TFA989X
+ 	tristate "NXP/Goodix TFA989X (TFA1) amplifiers"
+ 	depends on I2C
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 3d122ace75a..e655784ea36 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -332,6 +332,7 @@ snd-soc-tas2781-fmwlib-y := tas2781-fmwlib.o
+ snd-soc-tas2781-i2c-y := tas2781-i2c.o
+ snd-soc-tas2783-sdw-y := tas2783-sdw.o
+ snd-soc-tfa9879-y := tfa9879.o
++snd-soc-tfa9874-y := tfa9874.o
+ snd-soc-tfa989x-y := tfa989x.o
+ snd-soc-tlv320adc3xxx-y := tlv320adc3xxx.o
+ snd-soc-tlv320aic23-y := tlv320aic23.o
+@@ -776,6 +777,7 @@ obj-$(CONFIG_SND_SOC_TAS675X)	+= snd-soc-tas675x.o
+ obj-$(CONFIG_SND_SOC_TDA7419)	+= snd-soc-tda7419.o
+ obj-$(CONFIG_SND_SOC_TAS2770) += snd-soc-tas2770.o
+ obj-$(CONFIG_SND_SOC_TFA9879)	+= snd-soc-tfa9879.o
++obj-$(CONFIG_SND_SOC_TFA9874)	+= snd-soc-tfa9874.o
+ obj-$(CONFIG_SND_SOC_TFA989X)	+= snd-soc-tfa989x.o
+ obj-$(CONFIG_SND_SOC_TLV320ADC3XXX)	+= snd-soc-tlv320adc3xxx.o
+ obj-$(CONFIG_SND_SOC_TLV320AIC23)	+= snd-soc-tlv320aic23.o
+diff --git a/sound/soc/codecs/tfa9874.c b/sound/soc/codecs/tfa9874.c
+new file mode 100644
+index 00000000000..baa6b060abe
+--- /dev/null
++++ b/sound/soc/codecs/tfa9874.c
+@@ -0,0 +1,419 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * NXP TFA9874 smart amplifier
++ *
++ * The TFA9874 has no on-chip DSP: speaker protection runs on the host DSP and
++ * the amplifier itself only needs its registers programmed. The settings below
++ * come from the NXP tfa98xx driver (tfa9874_specific) and the OnePlus 9 Pro
++ * container file (tfa98xx.cnt, "speaker" profile).
++ *
++ * Register definitions/sequences taken from the NXP tfa98xx kernel driver:
++ * Copyright (C) 2014-2020 NXP Semiconductors, All Rights Reserved.
++ */
++
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/log2.h>
++#include <linux/module.h>
++#include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++
++/* bitfield: register << 8 | lsb << 4 | (width - 1) */
++#define TFA_BF(reg, pos, len)	(((reg) << 8) | ((pos) << 4) | ((len) - 1))
++#define TFA_BF_REG(bf)		((bf) >> 8)
++#define TFA_BF_MASK(bf)		GENMASK((((bf) >> 4) & 0xf) + ((bf) & 0xf), ((bf) >> 4) & 0xf)
++
++#define TFA9874_PWDN		TFA_BF(0x00, 0, 1)
++#define TFA9874_I2CR		TFA_BF(0x00, 1, 1)
++#define TFA9874_AMPE		TFA_BF(0x00, 3, 1)
++#define TFA9874_DCA		TFA_BF(0x00, 4, 1)
++#define TFA9874_MANSCONF	TFA_BF(0x01, 2, 1)
++#define TFA9874_AUDFS		TFA_BF(0x02, 0, 4)
++#define TFA9874_REV		0x03
++#define TFA9874_STATUS0		0x10
++#define TFA9874_STATUS1		0x11
++#define TFA9874_CLKS		BIT(7)
++#define TFA9874_MANSTATE	TFA_BF(0x14, 3, 4)
++#define TFA9874_TDMNBCK		TFA_BF(0x20, 12, 4)
++#define TFA9874_TDMSLLN		TFA_BF(0x21, 4, 5)
++#define TFA9874_TDMSSIZE	TFA_BF(0x22, 2, 5)
++#define TFA9874_KEY1		0xa0
++#define TFA9874_KEY2		0xa1
++#define TFA9874_KEY_UNHIDE	0x0f
++#define TFA9874_KEY1_SEED	0xfb
++
++#define TFA9874_MANSTATE_OPERATING	9
++
++struct tfa9874_bf_val {
++	u16 bf;
++	u16 val;
++};
++
++struct tfa9874_reg_val {
++	u8 reg;
++	u16 val;
++};
++
++/* tfa9874_specific(), "V1.6" optimal settings for revision 0x0b74 */
++static const struct tfa9874_reg_val tfa9874_rev_b_init[] = {
++	{ 0x02, 0x22a8 }, { 0x51, 0x0020 }, { 0x52, 0x57dc }, { 0x58, 0x16a4 },
++	{ 0x61, 0x0110 }, { 0x66, 0x0701 }, { 0x6f, 0x00a3 }, { 0x70, 0x07f8 },
++	{ 0x73, 0x0047 }, { 0x74, 0x5068 }, { 0x75, 0x0d28 }, { 0x83, 0x0595 },
++	{ 0x84, 0x0001 }, { 0x85, 0x0001 }, { 0x88, 0x0000 }, { 0xc4, 0x2001 },
++};
++
++/* tfa9874_specific(), settings for revision 0x0c74 */
++static const struct tfa9874_reg_val tfa9874_rev_c_init[] = {
++	{ 0x02, 0x22c8 }, { 0x52, 0x57dc }, { 0x53, 0x003e }, { 0x56, 0x0400 },
++	{ 0x61, 0x0110 }, { 0x6f, 0x00a5 }, { 0x70, 0x07f8 }, { 0x73, 0x0047 },
++	{ 0x74, 0x5098 }, { 0x75, 0x8d28 }, { 0x80, 0x0000 }, { 0x83, 0x0799 },
++	{ 0x84, 0x0081 },
++};
++
++/* Device settings from the container, minus the per-channel TDM slots */
++static const struct tfa9874_bf_val tfa9874_cnt_init[] = {
++	{ TFA_BF(0x23, 3, 1), 1 },	/* TDMCSE: current sense on TDM out */
++	{ TFA_BF(0x23, 4, 1), 0 },	/* TDMVSE */
++	{ TFA_BF(0x68, 0, 3), 3 },	/* TDMSRCMAP */
++	{ TFA_BF(0x04, 0, 2), 1 },	/* REFCKEXT: PLL locks to BCK */
++	{ TFA_BF(0x23, 1, 1), 1 },	/* TDMDCE */
++	{ TFA_BF(0x61, 6, 4), 4 },	/* TDMSPKG */
++	{ TFA_BF(0x61, 2, 4), 15 },	/* TDMDCG */
++	{ TFA_BF(0x68, 3, 2), 1 },	/* TDMSRCAS */
++	{ TFA_BF(0x68, 5, 2), 2 },	/* TDMSRCBS */
++	{ TFA_BF(0x02, 5, 6), 22 },	/* FRACTDEL */
++	{ TFA_BF(0x52, 5, 8), 190 },	/* AMPGAIN */
++	{ TFA_BF(0x53, 5, 1), 1 },
++	{ TFA_BF(0x64, 14, 2), 2 },	/* LPM1MODE */
++	{ TFA_BF(0x56, 9, 1), 0 },
++	{ TFA_BF(0x6f, 0, 3), 5 },	/* DELCURCOMP */
++	{ TFA_BF(0x6f, 7, 3), 1 },	/* LVLCLPPWM */
++	{ TFA_BF(0x70, 7, 2), 3 },	/* DCCV */
++	{ TFA_BF(0x74, 3, 1), 1 },	/* DCTRACK */
++	{ TFA_BF(0x74, 9, 5), 8 },	/* DCHOLD */
++	{ TFA_BF(0x75, 15, 1), 1 },	/* DCTRIPHYSTE */
++	{ TFA_BF(0x74, 15, 1), 0 },
++	{ TFA_BF(0x80, 0, 2), 0 },
++	{ TFA_BF(0x83, 0, 6), 25 },
++	{ TFA_BF(0x83, 6, 5), 30 },
++	{ TFA_BF(0x84, 5, 4), 4 },
++	{ TFA_BF(0x51, 5, 1), 0 },	/* HPFBYP */
++	{ TFA_BF(0x58, 4, 5), 1 },
++	{ TFA_BF(0x6f, 5, 1), 1 },	/* ENCURCOMP */
++	{ TFA_BF(0x85, 1, 1), 1 },
++	{ TFA_BF(0x85, 3, 1), 0 },
++	{ TFA_BF(0x85, 4, 1), 0 },
++	{ TFA_BF(0x88, 0, 2), 2 },
++	{ TFA_BF(0x84, 4, 1), 0 },
++	{ TFA_BF(0xc4, 13, 1), 0 },
++	{ TFA_BF(0xb0, 5, 1), 0 },
++	{ TFA_BF(0x74, 4, 5), 10 },	/* DCTRIP */
++	{ TFA_BF(0x75, 3, 5), 5 },	/* DCTRIP2 */
++	{ TFA_BF(0x75, 8, 5), 16 },	/* DCTRIPT */
++	{ TFA_BF(0x76, 3, 6), 30 },	/* DCVOF */
++	{ TFA_BF(0x76, 9, 6), 63 },	/* DCVOS */
++	/* "speaker" profile */
++	{ TFA_BF(0x64, 14, 2), 2 },	/* LPM1MODE */
++	{ TFA_BF(0x23, 1, 1), 1 },	/* TDMDCE */
++	{ TFA_BF(0x00, 4, 1), 1 },	/* DCA: boost converter on */
++	{ TFA_BF(0x61, 6, 4), 4 },	/* TDMSPKG */
++	{ TFA_BF(0x02, 4, 1), 0 },	/* INPLEV */
++	{ TFA_BF(0x62, 14, 2), 0 },	/* LNMODE */
++};
++
++#define TFA9874_TDMSPKS		TFA_BF(0x26, 0, 4)
++#define TFA9874_TDMDCS		TFA_BF(0x26, 4, 4)
++#define TFA9874_TDMCSS		TFA_BF(0x26, 12, 4)
++#define TFA9874_TDMVSS		TFA_BF(0x27, 0, 4)
++#define TFA9874_DCMCC		TFA_BF(0x70, 3, 4)
++
++struct tfa9874 {
++	struct device *dev;
++	struct regmap *regmap;
++	struct regulator *vdd;
++	struct gpio_desc *reset;
++	unsigned int rev;
++	unsigned int channel;
++	unsigned int rate;
++	unsigned int slot_width;
++};
++
++static int tfa9874_bf_write(struct tfa9874 *tfa, u16 bf, u16 val)
++{
++	u16 mask = TFA_BF_MASK(bf);
++
++	return regmap_update_bits(tfa->regmap, TFA_BF_REG(bf), mask,
++				  (val << __ffs(mask)) & mask);
++}
++
++static int tfa9874_bf_read(struct tfa9874 *tfa, u16 bf, unsigned int *val)
++{
++	u16 mask = TFA_BF_MASK(bf);
++	int ret;
++
++	ret = regmap_read(tfa->regmap, TFA_BF_REG(bf), val);
++	if (!ret)
++		*val = (*val & mask) >> __ffs(mask);
++	return ret;
++}
++
++static const unsigned int tfa9874_rates[] = {
++	8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000
++};
++
++static int tfa9874_rate_to_audfs(unsigned int rate)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(tfa9874_rates); i++)
++		if (tfa9874_rates[i] == rate)
++			return i;
++	return -EINVAL;
++}
++
++static int tfa9874_init(struct tfa9874 *tfa)
++{
++	const struct tfa9874_reg_val *init;
++	unsigned int i, n, seed;
++	int ret;
++
++	/* I2C reset, everything back to POR defaults */
++	ret = regmap_write(tfa->regmap, 0x00, BIT(1));
++	if (ret)
++		return ret;
++
++	/* Unlock key 1 and 2 */
++	regmap_write(tfa->regmap, TFA9874_KEY_UNHIDE, 0x5a6b);
++	regmap_read(tfa->regmap, TFA9874_KEY1_SEED, &seed);
++	regmap_write(tfa->regmap, TFA9874_KEY1, seed ^ 0x005a);
++	regmap_write(tfa->regmap, TFA9874_KEY2, 0x005a);
++
++	switch (tfa->rev) {
++	case 0x0b74:
++		init = tfa9874_rev_b_init;
++		n = ARRAY_SIZE(tfa9874_rev_b_init);
++		break;
++	case 0x0c74:
++		init = tfa9874_rev_c_init;
++		n = ARRAY_SIZE(tfa9874_rev_c_init);
++		break;
++	default:
++		dev_warn(tfa->dev, "no optimal settings for revision %#x\n", tfa->rev);
++		init = NULL;
++		n = 0;
++	}
++	for (i = 0; i < n; i++)
++		regmap_write(tfa->regmap, init[i].reg, init[i].val);
++
++	for (i = 0; i < ARRAY_SIZE(tfa9874_cnt_init); i++)
++		tfa9874_bf_write(tfa, tfa9874_cnt_init[i].bf, tfa9874_cnt_init[i].val);
++
++	/* Speaker in, current sense out; the other amp uses the other slot */
++	tfa9874_bf_write(tfa, TFA9874_TDMSPKS, tfa->channel);
++	tfa9874_bf_write(tfa, TFA9874_TDMDCS, !tfa->channel);
++	tfa9874_bf_write(tfa, TFA9874_TDMCSS, tfa->channel);
++	tfa9874_bf_write(tfa, TFA9874_TDMVSS, !tfa->channel);
++	tfa9874_bf_write(tfa, TFA9874_DCMCC, tfa->channel ? 10 : 11);
++
++	/* Two slots per frame, NBCK is log2(BCK per frame / 16) */
++	tfa9874_bf_write(tfa, TFA9874_TDMNBCK, ilog2(2 * tfa->slot_width / 16));
++	tfa9874_bf_write(tfa, TFA9874_TDMSLLN, tfa->slot_width - 1);
++	tfa9874_bf_write(tfa, TFA9874_TDMSSIZE, tfa->slot_width - 1);
++
++	return tfa9874_bf_write(tfa, TFA9874_AUDFS, tfa9874_rate_to_audfs(tfa->rate));
++}
++
++static void tfa9874_dump_status(struct tfa9874 *tfa, const char *when)
++{
++	unsigned int s0 = 0, s1 = 0, state = 0;
++
++	regmap_read(tfa->regmap, TFA9874_STATUS0, &s0);
++	regmap_read(tfa->regmap, TFA9874_STATUS1, &s1);
++	tfa9874_bf_read(tfa, TFA9874_MANSTATE, &state);
++	dev_dbg(tfa->dev, "%s: status %#06x %#06x manstate %u\n", when, s0, s1, state);
++}
++
++static int tfa9874_power_up(struct tfa9874 *tfa)
++{
++	unsigned int status, state;
++	int ret;
++
++	ret = tfa9874_init(tfa);
++	if (ret)
++		return ret;
++
++	/* Leave Wait4SrcSettings, power up and wait for the PLL to lock on BCK */
++	tfa9874_bf_write(tfa, TFA9874_MANSCONF, 1);
++	tfa9874_bf_write(tfa, TFA9874_PWDN, 0);
++	ret = regmap_read_poll_timeout(tfa->regmap, TFA9874_STATUS1, status,
++				       status & TFA9874_CLKS, 1000, 50000);
++	if (ret) {
++		tfa9874_dump_status(tfa, "no clock");
++		dev_err(tfa->dev, "clocks not stable, is BCK running?\n");
++		return ret;
++	}
++
++	tfa9874_bf_write(tfa, TFA9874_AMPE, 1);
++
++	ret = read_poll_timeout(tfa9874_bf_read, ret,
++				!ret && state == TFA9874_MANSTATE_OPERATING,
++				1000, 50000, false, tfa, TFA9874_MANSTATE, &state);
++	tfa9874_dump_status(tfa, "power up");
++	if (ret)
++		dev_warn(tfa->dev, "not operating (manstate %u)\n", state);
++
++	return 0;
++}
++
++static void tfa9874_power_down(struct tfa9874 *tfa)
++{
++	tfa9874_bf_write(tfa, TFA9874_AMPE, 0);
++	tfa9874_bf_write(tfa, TFA9874_PWDN, 1);
++}
++
++static int tfa9874_amp_event(struct snd_soc_dapm_widget *w,
++			     struct snd_kcontrol *kcontrol, int event)
++{
++	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++
++	switch (event) {
++	case SND_SOC_DAPM_POST_PMU:
++		return tfa9874_power_up(tfa);
++	case SND_SOC_DAPM_PRE_PMD:
++		tfa9874_power_down(tfa);
++		break;
++	}
++
++	return 0;
++}
++
++static const struct snd_soc_dapm_widget tfa9874_dapm_widgets[] = {
++	SND_SOC_DAPM_OUTPUT("OUT"),
++	SND_SOC_DAPM_OUT_DRV_E("AMP", SND_SOC_NOPM, 0, 0, NULL, 0, tfa9874_amp_event,
++			       SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
++	SND_SOC_DAPM_AIF_IN("AIFIN", "HiFi Playback", 0, SND_SOC_NOPM, 0, 0),
++};
++
++static const struct snd_soc_dapm_route tfa9874_dapm_routes[] = {
++	{ "AMP", NULL, "AIFIN" },
++	{ "OUT", NULL, "AMP" },
++};
++
++static const struct snd_soc_component_driver tfa9874_component = {
++	.dapm_widgets		= tfa9874_dapm_widgets,
++	.num_dapm_widgets	= ARRAY_SIZE(tfa9874_dapm_widgets),
++	.dapm_routes		= tfa9874_dapm_routes,
++	.num_dapm_routes	= ARRAY_SIZE(tfa9874_dapm_routes),
++	.use_pmdown_time	= 1,
++	.endianness		= 1,
++};
++
++static int tfa9874_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *params,
++			     struct snd_soc_dai *dai)
++{
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(dai->component);
++
++	if (tfa9874_rate_to_audfs(params_rate(params)) < 0) {
++		dev_err(tfa->dev, "unsupported rate %u\n", params_rate(params));
++		return -EINVAL;
++	}
++
++	tfa->rate = params_rate(params);
++	tfa->slot_width = params_physical_width(params);
++	return 0;
++}
++
++static const struct snd_soc_dai_ops tfa9874_dai_ops = {
++	.hw_params = tfa9874_hw_params,
++};
++
++static struct snd_soc_dai_driver tfa9874_dai = {
++	.name = "tfa9874-hifi",
++	.playback = {
++		.stream_name	= "HiFi Playback",
++		.formats	= SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE,
++		.rates		= SNDRV_PCM_RATE_8000_48000,
++		.rate_min	= 8000,
++		.rate_max	= 48000,
++		.channels_min	= 1,
++		.channels_max	= 2,
++	},
++	.ops = &tfa9874_dai_ops,
++};
++
++static const struct regmap_config tfa9874_regmap = {
++	.reg_bits = 8,
++	.val_bits = 16,
++	.max_register = 0xff,
++};
++
++static int tfa9874_i2c_probe(struct i2c_client *i2c)
++{
++	struct device *dev = &i2c->dev;
++	struct tfa9874 *tfa;
++	int ret;
++
++	tfa = devm_kzalloc(dev, sizeof(*tfa), GFP_KERNEL);
++	if (!tfa)
++		return -ENOMEM;
++
++	tfa->dev = dev;
++	tfa->rate = 48000;
++	tfa->slot_width = 16;
++	i2c_set_clientdata(i2c, tfa);
++	device_property_read_u32(dev, "nxp,tdm-slot", &tfa->channel);
++
++	tfa->regmap = devm_regmap_init_i2c(i2c, &tfa9874_regmap);
++	if (IS_ERR(tfa->regmap))
++		return PTR_ERR(tfa->regmap);
++
++	ret = devm_regulator_get_enable_optional(dev, "vdd");
++	if (ret && ret != -ENODEV)
++		return dev_err_probe(dev, ret, "failed to enable vdd\n");
++
++	/* The reset line is active high */
++	tfa->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(tfa->reset))
++		return dev_err_probe(dev, PTR_ERR(tfa->reset), "failed to get reset\n");
++	if (tfa->reset) {
++		usleep_range(1000, 2000);
++		gpiod_set_value_cansleep(tfa->reset, 0);
++		usleep_range(1000, 2000);
++	}
++
++	ret = regmap_read(tfa->regmap, TFA9874_REV, &tfa->rev);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to read revision\n");
++	if ((tfa->rev & 0xff) != 0x74)
++		return dev_err_probe(dev, -ENODEV, "unknown revision %#x\n", tfa->rev);
++
++	/* Stay powered down until a stream starts */
++	tfa9874_bf_write(tfa, TFA9874_PWDN, 1);
++
++	dev_info(dev, "TFA9874 revision %#x, TDM slot %u\n", tfa->rev, tfa->channel);
++
++	return devm_snd_soc_register_component(dev, &tfa9874_component, &tfa9874_dai, 1);
++}
++
++static const struct of_device_id tfa9874_of_match[] = {
++	{ .compatible = "nxp,tfa9874" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tfa9874_of_match);
++
++static struct i2c_driver tfa9874_i2c_driver = {
++	.driver = {
++		.name = "tfa9874",
++		.of_match_table = tfa9874_of_match,
++	},
++	.probe = tfa9874_i2c_probe,
++};
++module_i2c_driver(tfa9874_i2c_driver);
++
++MODULE_DESCRIPTION("NXP TFA9874 amplifier driver");
++MODULE_LICENSE("GPL");

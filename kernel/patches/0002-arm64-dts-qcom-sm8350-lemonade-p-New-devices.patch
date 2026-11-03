@@ -1,7 +1,7 @@
-From 5400bb9d69ac72c2b2cc7bcde7ba9d916ea9655e Mon Sep 17 00:00:00 2001
+From a177680a78ed05fd514c568cf33732aa7030120f Mon Sep 17 00:00:00 2001
 From: Nia Espera <nespera@igalia.com>
 Date: Wed, 18 Oct 2023 16:15:54 +0200
-Subject: [PATCH 002/110] arm64: dts: qcom: sm8350-lemonade(p): New devices
+Subject: [PATCH 002/114] arm64: dts: qcom: sm8350-lemonade(p): New devices
 
 Device tree files for OnePlus 9 and 9 Pro. Details of supported features
 mentioned in the cover letter for this patch series, but for

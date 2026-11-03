@@ -1,0 +1,36 @@
+# OnePlus 9 Pro build of Arch's wlroots0.20 package, with the patch from this folder.
+# Based on https://gitlab.archlinux.org/archlinux/packaging/packages/wlroots0.20
+
+pkgname=wlroots0.20-op9
+_pkgname=wlroots
+pkgver=0.20.2
+pkgrel=1
+pkgdesc="Modular Wayland compositor library (OnePlus 9 Pro patches)"
+url="https://gitlab.freedesktop.org/wlroots/wlroots"
+license=('MIT')
+arch=('aarch64')
+depends=('glibc' 'libdisplay-info.so' 'libdrm' 'libglvnd' 'libinput' 'liblcms2.so' 'libliftoff.so' 'libpixman-1.so'
+         'libseat.so' 'libudev.so' 'libvulkan.so' 'libwayland-client.so' 'libwayland-server.so' 'libxcb' 'libxkbcommon.so'
+         'wayland-protocols' 'opengl-driver' 'xcb-util-errors' 'xcb-util-renderutil' 'xcb-util-wm')
+makedepends=('git' 'glslang' 'meson' 'ninja' 'systemd' 'vulkan-headers' 'xorg-xwayland')
+optdepends=('xorg-xwayland: Xwayland support')
+provides=("wlroots0.20=$pkgver" "libwlroots-${pkgver%.*}.so")
+conflicts=('wlroots0.20')
+source=("$_pkgname::git+$url.git#tag=$pkgver"
+        0001-Revert-layer-shell-error-on-0-dimension-without-anch.patch)
+b2sums=('SKIP' 'SKIP')
+
+prepare() {
+	cd $_pkgname
+	patch -Np1 < ../0001-Revert-layer-shell-error-on-0-dimension-without-anch.patch
+}
+
+build() {
+	arch-meson $_pkgname build
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+	install -Dm 644 $_pkgname/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

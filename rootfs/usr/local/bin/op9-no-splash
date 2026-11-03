@@ -1,6 +1,12 @@
 #!/bin/bash
 # Phosh can't turn off its app loading splash, but skips apps that don't announce their startup.
 # Writes overrides for the launcher's apps in the user's folder. Undo: op9-no-splash --undo
+# The pacman hook runs it as root with --hook, which reruns it as the user Phosh runs as.
+if [ "$1" = --hook ]; then
+	user=$(systemctl show -P User phosh.service 2>/dev/null)
+	user=$(id -nu "${user:-1000}" 2>/dev/null) || exit 0
+	exec /usr/bin/runuser -u "$user" -- "$0"
+fi
 dest=${XDG_DATA_HOME:-$HOME/.local/share}/applications
 marker=X-Op9-NoSplash=true
 mkdir -p "$dest"

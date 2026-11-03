@@ -9,6 +9,7 @@ After=getty@tty7.service
 Type=simple
 ExecStartPre=+/usr/bin/chvt 7
 ExecStart=/usr/bin/phosh-session
+# The phone user: alarm on Arch Linux ARM. Change this to use another account.
 User=1000
 WorkingDirectory=~
 PAMName=phosh

@@ -1,0 +1,177 @@
+From efe2047ea6f8e5123f3446fa01e2df95245081ce Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 03:55:13 +0000
+Subject: [PATCH 077/114] HACK: drm/msm/dpu: flush command mode commits between
+ autorefreshes
+
+At 120 Hz a refresh takes ~6.2 of the 8.3 ms frame, and a commit's flush
+landing while autorefresh is writing showed as occasional tearing.
+
+dpu_cmd_autorefresh_sync selects how commits meet a running autorefresh:
+0 flushes any time (old behaviour), 1 stops autorefresh and kicks off
+with CTL_START like downstream (the stop only takes effect at a frame
+boundary, so a late autorefresh and the CTL_START both fire and the DSI
+FIFO underruns, which garbles the panel), 2 (default) leaves autorefresh
+running and waits for the refresh in flight to finish so the flush lands
+in the idle gap before the next TE.
+
+Also re-arm autorefresh only when a kickoff completes, expose the INTF
+vsync info as an op, and poll autorefresh disable in 100 us steps.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c   |  5 ++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h   |  1 +
+ .../drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c  | 50 +++++++++++++++++--
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c   | 10 ++--
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h   |  2 +
+ 5 files changed, 61 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 60c033fb8e4..0c7cc365fbb 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -40,6 +40,11 @@ bool dpu_cmd_autorefresh = true;
+ module_param(dpu_cmd_autorefresh, bool, 0600);
+ MODULE_PARM_DESC(dpu_cmd_autorefresh, "Keep command mode panels refreshed on every TE (HACK)");
+ 
++int dpu_cmd_autorefresh_sync = 2;
++module_param(dpu_cmd_autorefresh_sync, int, 0600);
++MODULE_PARM_DESC(dpu_cmd_autorefresh_sync,
++		 "Commits under autorefresh: 0 flush any time, 1 stop autorefresh and CTL_START, 2 flush between refreshes (HACK)");
++
+ #define DPU_DEBUG_ENC(e, fmt, ...) DRM_DEBUG_ATOMIC("enc%d " fmt,\
+ 		(e) ? (e)->base.base.id : -1, ##__VA_ARGS__)
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+index ef22aad7b64..88a68169187 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+@@ -20,6 +20,7 @@
+ #define IDLE_TIMEOUT	(66 - 16/2)
+ 
+ extern bool dpu_cmd_autorefresh;
++extern int dpu_cmd_autorefresh_sync;
+ 
+ #define MAX_H_TILES_PER_DISPLAY 2
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
+index f0335df1e59..562ea426a57 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
+@@ -114,8 +114,12 @@ static void dpu_encoder_phys_cmd_pp_tx_done_irq(void *arg)
+ 	 * luminance whenever it goes from self-refresh to a host frame write,
+ 	 * so once the committed frame is out keep re-sending it on every TE.
+ 	 * prepare_for_kickoff() disables autorefresh before the next commit.
++	 * Only re-arm when this interrupt completed one of our kickoffs: the
++	 * done of a late autorefresh frame can arrive after prepare_for_kickoff()
++	 * stopped autorefresh, and re-arming then makes autorefresh and the
++	 * CTL_START both trigger, which underruns the DSI FIFO.
+ 	 */
+-	if (dpu_cmd_autorefresh && phys_enc->has_intf_te &&
++	if (dpu_cmd_autorefresh && phys_enc->has_intf_te && new_cnt &&
+ 	    !atomic_read(&phys_enc->pending_kickoff_cnt) &&
+ 	    dpu_encoder_phys_cmd_is_master(phys_enc) &&
+ 	    phys_enc->hw_intf->ops.setup_autorefresh)
+@@ -603,6 +607,31 @@ static void dpu_encoder_phys_cmd_disable(struct dpu_encoder_phys *phys_enc)
+ 	phys_enc->enable_state = DPU_ENC_DISABLED;
+ }
+ 
++/* HACK (OnePlus 9 Pro): see dpu_encoder_phys_cmd_prepare_for_kickoff() */
++static void dpu_encoder_phys_cmd_wait_refresh_idle(struct dpu_encoder_phys *phys_enc)
++{
++	u16 vdisplay = phys_enc->cached_mode.vdisplay;
++	struct dpu_hw_pp_vsync_info info;
++	int waited = 0;
++
++	if (!phys_enc->hw_intf->ops.get_vsync_info)
++		return;
++
++	for (;;) {
++		phys_enc->hw_intf->ops.get_vsync_info(phys_enc->hw_intf, &info);
++		if (!info.wr_ptr_line_count || info.wr_ptr_line_count >= vdisplay)
++			break;
++		if (waited > KICKOFF_TIMEOUT_MS * USEC_PER_MSEC) {
++			DPU_ERROR("intf%d refresh still writing line %u\n",
++				  phys_enc->hw_intf->idx - INTF_0,
++				  info.wr_ptr_line_count);
++			break;
++		}
++		udelay(50);
++		waited += 50;
++	}
++}
++
+ static void dpu_encoder_phys_cmd_prepare_for_kickoff(
+ 		struct dpu_encoder_phys *phys_enc)
+ {
+@@ -632,11 +661,24 @@ static void dpu_encoder_phys_cmd_prepare_for_kickoff(
+ 	}
+ 
+ 	/*
+-	 * With autorefresh running the flushed config is picked up by the
+-	 * next TE-triggered refresh, as the downstream SDE driver does.
++	 * With autorefresh running a bare flush is picked up by the next
++	 * TE-triggered refresh, but if it lands while a refresh is being
++	 * written the panel can get parts of two frames (tearing).
++	 * Mode 1 stops autorefresh and waits for the frame in flight, like the
++	 * downstream SDE prepare_commit, then kicks off with CTL_START, but
++	 * the stop only takes effect at a frame boundary and races with
++	 * the next TE. Mode 2 keeps autorefresh running and instead waits for
++	 * the refresh in flight to finish, so the flush lands in the idle gap
++	 * before the next TE (~2 ms at 120 Hz).
+ 	 */
+-	if (!dpu_encoder_phys_cmd_autorefresh_on(phys_enc))
++	if (dpu_encoder_phys_cmd_autorefresh_on(phys_enc)) {
++		if (dpu_cmd_autorefresh_sync == 1)
++			dpu_encoder_phys_cmd_enable_te(phys_enc);
++		else if (dpu_cmd_autorefresh_sync == 2)
++			dpu_encoder_phys_cmd_wait_refresh_idle(phys_enc);
++	} else {
+ 		dpu_encoder_phys_cmd_enable_te(phys_enc);
++	}
+ 
+ 	DPU_DEBUG_CMDENC(cmd_enc, "pp:%d pending_cnt %d\n",
+ 			phys_enc->hw_pp->idx - PINGPONG_0,
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c
+index c456c43122c..ffafcccd5d6 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c
+@@ -565,10 +565,13 @@ static void dpu_hw_intf_disable_autorefresh(struct dpu_hw_intf *intf,
+ 	dpu_hw_intf_connect_external_te(intf, false);
+ 	dpu_hw_intf_setup_autorefresh_config(intf, 0, false);
+ 
++	/*
++	 * HACK (OnePlus 9 Pro): this now runs before every commit, so poll in
++	 * 100 us steps instead of 2 ms ones (a whole frame is 8.3 ms at 120 Hz).
++	 */
+ 	do {
+-		udelay(DPU_ENC_MAX_POLL_TIMEOUT_US);
+-		if ((trial * DPU_ENC_MAX_POLL_TIMEOUT_US)
+-				> (KICKOFF_TIMEOUT_MS * USEC_PER_MSEC)) {
++		udelay(100);
++		if ((trial * 100) > (KICKOFF_TIMEOUT_MS * USEC_PER_MSEC)) {
+ 			DPU_ERROR("enc%d intf%d disable autorefresh failed\n",
+ 				  encoder_id, intf->idx - INTF_0);
+ 			break;
+@@ -661,6 +664,7 @@ struct dpu_hw_intf *dpu_hw_intf_init(struct drm_device *dev,
+ 		c->ops.disable_autorefresh = dpu_hw_intf_disable_autorefresh;
+ 		c->ops.setup_autorefresh = dpu_hw_intf_setup_autorefresh_config;
+ 		c->ops.get_autorefresh = dpu_hw_intf_get_autorefresh_config;
++		c->ops.get_vsync_info = dpu_hw_intf_get_vsync_info;
+ 	}
+ 
+ 	/* Technically, INTF_CONFIG2 is present for DPU 5.0+, but
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h
+index 86c54a9d476..4c5530a6349 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h
+@@ -111,6 +111,8 @@ struct dpu_hw_intf_ops {
+ 	void (*disable_autorefresh)(struct dpu_hw_intf *intf, uint32_t encoder_id, u16 vdisplay);
+ 	void (*setup_autorefresh)(struct dpu_hw_intf *intf, u32 frame_count, bool enable);
+ 	bool (*get_autorefresh)(struct dpu_hw_intf *intf, u32 *frame_count);
++	int (*get_vsync_info)(struct dpu_hw_intf *intf,
++			      struct dpu_hw_pp_vsync_info *info);
+ 
+ 	void (*program_intf_cmd_cfg)(struct dpu_hw_intf *intf,
+ 				     struct dpu_hw_intf_cmd_mode_cfg *cmd_mode_cfg);

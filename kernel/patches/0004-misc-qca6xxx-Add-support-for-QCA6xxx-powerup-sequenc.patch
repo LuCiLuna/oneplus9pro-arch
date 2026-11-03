@@ -1,7 +1,7 @@
-From 6be9dcb3c84d951900a3bc09f0b55931622d0924 Mon Sep 17 00:00:00 2001
+From a24fb56d80e89f129ce8bd8ee47862bbcd9aa8d2 Mon Sep 17 00:00:00 2001
 From: Nia Espera <nespera@igalia.com>
 Date: Sun, 12 Nov 2023 16:34:48 +0100
-Subject: [PATCH 004/110] misc: qca6xxx: Add support for QCA6xxx powerup
+Subject: [PATCH 004/114] misc: qca6xxx: Add support for QCA6xxx powerup
  sequence
 
 ---

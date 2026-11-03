@@ -1,0 +1,29 @@
+From f25f590068d7191d6a623a02b0718f1c9c90901e Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 14:29:18 -0600
+Subject: [PATCH 099/114] interconnect: qcom: sm8350: link qns_pcie to
+ qnm_gemnoc_pcie
+
+qns_pcie has no links, so chm_apps can't reach xs_pcie_0 or xs_pcie_1 even
+though qnm_gemnoc_pcie exists and links to both. A cpu-pcie path request
+fails with -EPROBE_DEFER forever because path_find() finds no route, which
+went unnoticed as sm8350.dtsi never requested the path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/interconnect/qcom/sm8350.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/interconnect/qcom/sm8350.c b/drivers/interconnect/qcom/sm8350.c
+index d92c26bee59..857e5162007 100644
+--- a/drivers/interconnect/qcom/sm8350.c
++++ b/drivers/interconnect/qcom/sm8350.c
+@@ -1131,6 +1131,8 @@ static struct qcom_icc_node qns_pcie = {
+ 	.name = "qns_pcie",
+ 	.channels = 1,
+ 	.buswidth = 8,
++	.num_links = 1,
++	.link_nodes = { &qnm_gemnoc_pcie },
+ };
+ 
+ static struct qcom_icc_node srvc_even_gemnoc = {

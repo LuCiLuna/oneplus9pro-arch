@@ -1,0 +1,37 @@
+# OnePlus 9 Pro build of Arch's phoc package, with the patch from this folder.
+# Based on https://gitlab.archlinux.org/archlinux/packaging/packages/phoc
+
+pkgname=phoc-op9
+_pkgname=phoc
+pkgver=0.57.0
+pkgrel=1
+pkgdesc='Display compositor designed for phones (OnePlus 9 Pro patches)'
+arch=(aarch64)
+url='https://gitlab.gnome.org/World/Phosh/phoc'
+license=(GPL-3.0-or-later)
+depends=(cairo dconf libgcc glib2 glibc gnome-desktop gsettings-desktop-schemas hicolor-icon-theme
+         libgmobile libinput libxcb libxkbcommon mutter pango pixman systemd-libs wayland
+         wlroots0.20 xorg-xwayland)
+makedepends=(git glib2-devel meson python-docutils wayland-protocols)
+provides=("phoc=$pkgver")
+conflicts=(phoc)
+source=("git+https://gitlab.gnome.org/World/Phosh/phoc.git#tag=v$pkgver"
+        git+https://gitlab.gnome.org/GNOME/gvdb.git
+        phoc-op9.patch)
+b2sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  ln -sfn "$srcdir/gvdb" $_pkgname/subprojects/gvdb
+  meson subprojects checkout --sourcedir $_pkgname
+  cd $_pkgname
+  patch -Np1 < ../phoc-op9.patch
+}
+
+build() {
+  arch-meson $_pkgname build -D embed-wlroots=disabled -D man=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}

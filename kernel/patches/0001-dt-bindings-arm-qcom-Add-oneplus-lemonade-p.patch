@@ -1,7 +1,7 @@
-From fd93af64d3a29ab9be92d1afc46650816b5ca705 Mon Sep 17 00:00:00 2001
+From 7688da8cedcb4c0494d2f7c26c8dd402e99f023e Mon Sep 17 00:00:00 2001
 From: Nia Espera <nespera@igalia.com>
 Date: Wed, 18 Oct 2023 16:12:41 +0200
-Subject: [PATCH 001/110] dt-bindings: arm: qcom: Add oneplus-lemonade(p)
+Subject: [PATCH 001/114] dt-bindings: arm: qcom: Add oneplus-lemonade(p)
 
 Document the devicetree bindings for oneplus-lemonade and oneplus-lemonadep.
 

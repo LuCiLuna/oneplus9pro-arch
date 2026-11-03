@@ -1,7 +1,7 @@
-From 642c867ac14146021c776882b7611f8db2e05ab4 Mon Sep 17 00:00:00 2001
+From ce349c66925f426d2843d99f085a2eebcc25cff3 Mon Sep 17 00:00:00 2001
 From: Nia Espera <nespera@igalia.com>
 Date: Sun, 12 Nov 2023 16:33:10 +0100
-Subject: [PATCH 003/110] dt-bindings: mfd: qcom,qca6xxx: Support QCA6xxx
+Subject: [PATCH 003/114] dt-bindings: mfd: qcom,qca6xxx: Support QCA6xxx
  devices
 
 ---

@@ -1,0 +1,106 @@
+From c77cbd5754d9124ee390ab1716f97e6a80d3312f Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 14:29:18 -0600
+Subject: [PATCH 098/114] HACK: drm/msm/dpu: hold autorefresh flip events until
+ the flush is latched
+
+Autorefresh commits never raise CTL_START, so wait_for_commit_done() took
+the ctl start path, found nothing pending and returned at once. The flip
+event then went out before the hardware latched the new buffer, about
+0.6 ms ahead of the next TE at best. The compositor started painting into
+the old buffer straight away while the next refresh could still read it, and
+the panel flashed half painted frames (wallpaper, black, misplaced video)
+during full screen updates such as video playback. Screen captures stayed
+clean because they read the finished frame.
+
+Poll CTL_FLUSH until it clears, as the video mode encoder does. The latch
+takes about 1.4 ms after a flush landing in the idle gap, so 120 Hz is kept.
+dpu_cmd_flush_latch=0 restores the old behaviour for comparison.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c   |  4 +++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h   |  1 +
+ .../drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c  | 28 +++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 0c7cc365fbb..d0acefa2077 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -45,6 +45,10 @@ module_param(dpu_cmd_autorefresh_sync, int, 0600);
+ MODULE_PARM_DESC(dpu_cmd_autorefresh_sync,
+ 		 "Commits under autorefresh: 0 flush any time, 1 stop autorefresh and CTL_START, 2 flush between refreshes (HACK)");
+ 
++bool dpu_cmd_flush_latch = true;
++module_param(dpu_cmd_flush_latch, bool, 0600);
++MODULE_PARM_DESC(dpu_cmd_flush_latch, "Hold autorefresh flip events until the flush is latched (HACK)");
++
+ #define DPU_DEBUG_ENC(e, fmt, ...) DRM_DEBUG_ATOMIC("enc%d " fmt,\
+ 		(e) ? (e)->base.base.id : -1, ##__VA_ARGS__)
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+index 88a68169187..321c6864f83 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+@@ -21,6 +21,7 @@
+ 
+ extern bool dpu_cmd_autorefresh;
+ extern int dpu_cmd_autorefresh_sync;
++extern bool dpu_cmd_flush_latch;
+ 
+ #define MAX_H_TILES_PER_DISPLAY 2
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
+index 562ea426a57..bba72cf7fd5 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
+@@ -4,6 +4,8 @@
+  */
+ 
+ #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
++#include <linux/iopoll.h>
++
+ #include <linux/delay.h>
+ #include <linux/string_choices.h>
+ #include "dpu_encoder_phys.h"
+@@ -752,6 +754,29 @@ static int dpu_encoder_phys_cmd_wait_for_tx_complete(
+ 	return rc;
+ }
+ 
++/*
++ * HACK (OnePlus 9 Pro): autorefresh commits never raise CTL_START, so the
++ * ctl start wait in wait_for_commit_done() has nothing to wait for and the flip
++ * event went out before the hardware latched the new buffer. The compositor
++ * then painted into the old buffer while the next refresh could still read it,
++ * which flashed half painted frames on the panel. CTL_FLUSH clears when the
++ * flush is latched, as the video mode encoder relies on.
++ */
++static int dpu_encoder_phys_cmd_wait_for_flush_latch(struct dpu_encoder_phys *phys_enc)
++{
++	struct dpu_hw_ctl *ctl = phys_enc->hw_ctl;
++	u32 flush;
++	int ret;
++
++	ret = read_poll_timeout(ctl->ops.get_flush_register, flush, !flush, 100,
++				KICKOFF_TIMEOUT_MS * USEC_PER_MSEC, false, ctl);
++	if (ret)
++		DRM_ERROR_RATELIMITED("intf%d flush not latched: %#x\n",
++				      phys_enc->hw_intf->idx - INTF_0, flush);
++
++	return 0;
++}
++
+ static int dpu_encoder_phys_cmd_wait_for_commit_done(
+ 		struct dpu_encoder_phys *phys_enc)
+ {
+@@ -759,6 +784,9 @@ static int dpu_encoder_phys_cmd_wait_for_commit_done(
+ 	if (!dpu_encoder_phys_cmd_is_master(phys_enc))
+ 		return 0;
+ 
++	if (dpu_cmd_flush_latch && dpu_encoder_phys_cmd_autorefresh_on(phys_enc))
++		return dpu_encoder_phys_cmd_wait_for_flush_latch(phys_enc);
++
+ 	if (phys_enc->irq[INTR_IDX_CTL_START] &&
+ 	    !phys_enc->hw_ctl->ops.is_started(phys_enc->hw_ctl))
+ 		return _dpu_encoder_phys_cmd_wait_for_ctl_start(phys_enc);

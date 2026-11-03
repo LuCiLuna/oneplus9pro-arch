@@ -1,0 +1,53 @@
+From 993c1d4c7f3471dc4fc390eecc8bc4ef7dee6eb0 Mon Sep 17 00:00:00 2001
+From: Nia Espera <nespera@igalia.com>
+Date: Fri, 3 Nov 2023 18:29:53 +0100
+Subject: [PATCH 007/114] UNTESTED: arm64: dts: qcom: sm8350: Add 4pin config
+ for uart18 node
+
+---
+ arch/arm64/boot/dts/qcom/sm8350.dtsi | 32 ++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350.dtsi b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+index 32b47f5ec1f..701c3c6bd2a 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+@@ -3400,6 +3400,38 @@ qup_uart18_default: qup-uart18-default-state {
+ 				bias-disable;
+ 			};
+ 
++			qup_uart18_4pin: qup-uart18-4pin-state {
++				cts-pins {
++					pins = "gpio68";
++					function = "qup18";
++					drive-strength = <2>;
++					bias-bus-hold;
++				};
++
++				rts-pins {
++					pins = "gpio69";
++					function = "qup18";
++					drive-strength = <2>;
++					bias-disable;
++				};
++
++				tx-pins {
++					pins = "gpio70";
++					function = "qup18";
++					drive-strength = <2>;
++					bias-disable;
++					output-enable;
++				};
++
++				rx-pins {
++					pins = "gpio71";
++					function = "qup18";
++					drive-strength = <2>;
++					bias-disable;
++					output-disable;
++				};
++			};
++
+ 			qup_i2c0_default: qup-i2c0-default-state {
+ 				pins = "gpio4", "gpio5";
+ 				function = "qup0";

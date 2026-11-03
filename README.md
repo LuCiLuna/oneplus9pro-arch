@@ -34,7 +34,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
-| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; each phone must set its own address |
+| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; Bluetooth LE scanning works; each phone must set its own address |
 | Buttons | ✅ | Power, volume up and volume down |
 | Alert slider | ✅ | Top silent, middle vibrate, bottom ring |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
@@ -56,10 +56,10 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 120 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 114 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
-| [`userspace/`](userspace) | Patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
+| [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
 | [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding, and its settings |
 | [`tools/`](tools) | Source for helper tools |
 | [`docs/`](docs) | [Install guide](docs/INSTALL.md), [status](docs/STATUS.md) and [hardware notes](docs/HARDWARE.md) |

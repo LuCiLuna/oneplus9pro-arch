@@ -1,0 +1,48 @@
+From af843a94d1bc5e747eb40af692dc34f6fceb4136 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 08:42:41 +0000
+Subject: [PATCH 086/114] HACK: clk: qcom: dispcc-sm8250: don't park the MDP,
+ AHB and VSYNC RCGs at boot
+
+clk_rcg2_shared_ops parks the RCG on XO at registration. On the OnePlus 9
+Pro the bootloader leaves the command mode panel running with DPU
+autorefresh, so dropping the MDP clock from 460 MHz to 19.2 MHz underruns
+the DSI link and the panel shuts itself off. Leave the bootloader setup
+alone until msm reprograms it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/clk/qcom/dispcc-sm8250.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/clk/qcom/dispcc-sm8250.c b/drivers/clk/qcom/dispcc-sm8250.c
+index fdc07323f29..49c0780fa4c 100644
+--- a/drivers/clk/qcom/dispcc-sm8250.c
++++ b/drivers/clk/qcom/dispcc-sm8250.c
+@@ -218,7 +218,7 @@ static struct clk_rcg2 disp_cc_mdss_ahb_clk_src = {
+ 		.parent_data = disp_cc_parent_data_3,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_3),
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_shared_ops,
++		.ops = &clk_rcg2_shared_no_init_park_ops,
+ 	},
+ };
+ 
+@@ -564,7 +564,7 @@ static struct clk_rcg2 disp_cc_mdss_mdp_clk_src = {
+ 		.parent_data = disp_cc_parent_data_5,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_5),
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_shared_ops,
++		.ops = &clk_rcg2_shared_no_init_park_ops,
+ 	},
+ };
+ 
+@@ -631,7 +631,7 @@ static struct clk_rcg2 disp_cc_mdss_vsync_clk_src = {
+ 		.parent_data = disp_cc_parent_data_1,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_1),
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_shared_ops,
++		.ops = &clk_rcg2_shared_no_init_park_ops,
+ 	},
+ };
+ 

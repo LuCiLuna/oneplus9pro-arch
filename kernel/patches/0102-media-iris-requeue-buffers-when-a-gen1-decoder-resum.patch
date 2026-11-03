@@ -1,0 +1,108 @@
+From ae1d1b8daae67cb34a0d14fd6af866d1ce7bd980 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:22:12 -0600
+Subject: [PATCH 102/114] media: iris: requeue buffers when a gen1 decoder
+ resumes without a capture restart
+
+HFI_FLUSH_ALL and HFI_FLUSH_OUTPUT also return the DPB buffers. They were only
+given back by a capture queue restart, so decoding stalled after a few frames in
+two cases that keep the capture queue running:
+
+- A seek, which restarts only the input queue as the stateful decoder
+  specification describes.
+- V4L2_DEC_CMD_START after a source change that keeps the format, which VP9
+  sends when restarting after a drain. This path also never queued the buffers
+  deferred during the pause.
+
+Requeue them in both, waiting for the source change's flush to finish first as
+the firmware returns the buffers asynchronously.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/platform/qcom/iris/iris_vdec.c | 48 +++++++++++++++++++-
+ 1 file changed, 46 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_vdec.c b/drivers/media/platform/qcom/iris/iris_vdec.c
+index 9e228b70420..de15549ba58 100644
+--- a/drivers/media/platform/qcom/iris/iris_vdec.c
++++ b/drivers/media/platform/qcom/iris/iris_vdec.c
+@@ -358,10 +358,31 @@ void iris_vdec_src_change(struct iris_inst *inst)
+ 	v4l2_event_queue_fh(&inst->fh, &event);
+ }
+ 
++/*
++ * Stopping the input while the capture queue runs flushes the firmware, which
++ * also returns the DPB buffers. Nothing else requeues them on a seek, and with
++ * no reference buffers the decoder stalls after a few frames, so defer them
++ * here for iris_vb2_start_streaming() to queue.
++ */
++static void iris_vdec_defer_returned_dpb_buffers(struct iris_inst *inst)
++{
++	struct iris_buffer *buffer;
++
++	list_for_each_entry(buffer, &inst->buffers[BUF_DPB].list, list) {
++		if (buffer->attr & (BUF_ATTR_QUEUED | BUF_ATTR_PENDING_RELEASE))
++			continue;
++		buffer->attr &= ~(BUF_ATTR_DEQUEUED | BUF_ATTR_BUFFER_DONE);
++		buffer->attr |= BUF_ATTR_DEFERRED;
++	}
++}
++
+ int iris_vdec_streamon_input(struct iris_inst *inst)
+ {
+ 	int ret;
+ 
++	if (inst->state == IRIS_INST_OUTPUT_STREAMING)
++		iris_vdec_defer_returned_dpb_buffers(inst);
++
+ 	ret = iris_set_properties(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+ 	if (ret)
+ 		return ret;
+@@ -471,7 +492,8 @@ int iris_vdec_start_cmd(struct iris_inst *inst)
+ 	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
+ 	enum iris_inst_sub_state clear_sub_state = 0;
+ 	struct vb2_queue *dst_vq;
+-	int ret;
++	bool drc_active = false;
++	int ret, i;
+ 
+ 	dst_vq = v4l2_m2m_get_dst_vq(inst->m2m_ctx);
+ 
+@@ -479,6 +501,7 @@ int iris_vdec_start_cmd(struct iris_inst *inst)
+ 	    inst->sub_state & IRIS_INST_SUB_DRC_LAST) {
+ 		vb2_clear_last_buffer_dequeued(dst_vq);
+ 		clear_sub_state = IRIS_INST_SUB_DRC | IRIS_INST_SUB_DRC_LAST;
++		drc_active = true;
+ 
+ 		if (inst->sub_state & IRIS_INST_SUB_INPUT_PAUSE) {
+ 			ret = hfi_ops->session_resume_drc(inst,
+@@ -526,7 +549,28 @@ int iris_vdec_start_cmd(struct iris_inst *inst)
+ 		return -EBUSY;
+ 	}
+ 
+-	return iris_inst_change_sub_state(inst, clear_sub_state, 0);
++	ret = iris_inst_change_sub_state(inst, clear_sub_state, 0);
++	if (ret || !drc_active)
++		return ret;
++
++	/*
++	 * Resuming after a source change that keeps the format skips the capture
++	 * restart that normally requeues buffers. The source change flushed the
++	 * firmware's capture side, so wait for that to finish, then give the DPB
++	 * buffers back along with whatever was deferred during the pause.
++	 */
++	for (i = 0; i < 2 && inst->flush_responses_pending; i++)
++		iris_wait_for_session_response(inst, true);
++
++	iris_vdec_defer_returned_dpb_buffers(inst);
++	ret = iris_queue_internal_deferred_buffers(inst, BUF_DPB);
++	if (ret)
++		return ret;
++	ret = iris_queue_deferred_buffers(inst, BUF_INPUT);
++	if (ret)
++		return ret;
++
++	return iris_queue_deferred_buffers(inst, BUF_OUTPUT);
+ }
+ 
+ int iris_vdec_stop_cmd(struct iris_inst *inst)

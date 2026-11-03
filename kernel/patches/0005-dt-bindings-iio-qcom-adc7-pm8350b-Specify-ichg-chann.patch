@@ -1,7 +1,7 @@
-From ac7e58587164d9136d59f15e9f2d1891937d6aa3 Mon Sep 17 00:00:00 2001
+From 922dce6d14aad9ccd7f8fcdbfb3123d504b8ff98 Mon Sep 17 00:00:00 2001
 From: Nia Espera <nespera@igalia.com>
 Date: Sat, 11 Nov 2023 23:37:49 +0100
-Subject: [PATCH 005/110] dt-bindings: iio: qcom: adc7-pm8350b: Specify ichg
+Subject: [PATCH 005/114] dt-bindings: iio: qcom: adc7-pm8350b: Specify ichg
  channel id
 
 ---

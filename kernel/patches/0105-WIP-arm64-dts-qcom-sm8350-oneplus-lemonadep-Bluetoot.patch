@@ -1,0 +1,32 @@
+From 11c7b12278d96747e2a0aea7464349d824f2c99f Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 23:07:28 -0600
+Subject: [PATCH 105/114] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep:
+ Bluetooth address
+
+The chip has no address of its own, so the kernel leaves the controller
+unconfigured and BlueZ sees no adapter. The vendor stack reads it from modem
+NV item BD_ADDR over QMI, but the modem isn't running here. Give the driver
+each build's address directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 40ee0da4d04..593a0457255 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -1132,6 +1132,11 @@ &wifi {
+ 	local-mac-address = [00 00 00 00 00 00];
+ };
+ 
++/* Set by BT_ADDR in kernel/build.sh; without it the adapter stays unconfigured */
++&bluetooth {
++	local-bd-address = [00 00 00 00 00 00];
++};
++
+ /* pm8008i L1 only feeds the telephoto sensor core (DVDD, 1.2 V) */
+ &vreg_l1i {
+ 	regulator-min-microvolt = <1200000>;

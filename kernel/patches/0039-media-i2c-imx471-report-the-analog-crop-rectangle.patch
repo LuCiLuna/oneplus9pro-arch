@@ -1,0 +1,60 @@
+From c9a7518e670a69911bea7846adfe8909ad838f2e Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 15:48:10 +0000
+Subject: [PATCH 039/114] media: i2c: imx471: report the analog crop rectangle
+
+V4L2_SEL_TGT_CROP fell through to -EINVAL and the crop state was never
+filled in, so libcamera could not read the sensor crop. Record the
+mode's crop (the 2x2 binned window plus the digital crop, in native
+pixel coordinates) in the pad state and return it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/media/i2c/imx471.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/i2c/imx471.c b/drivers/media/i2c/imx471.c
+index c4e98843e27..4e5230c8ee6 100644
+--- a/drivers/media/i2c/imx471.c
++++ b/drivers/media/i2c/imx471.c
+@@ -133,6 +133,9 @@ struct imx471_mode {
+ 	/* H-timing */
+ 	u32 llp;
+ 
++	/* Analog crop, in native pixel array coordinates */
++	struct v4l2_rect crop;
++
+ 	const struct cci_reg_sequence *default_mode_regs;
+ 	unsigned int default_mode_regs_length;
+ };
+@@ -285,6 +288,13 @@ static const struct imx471_mode imx471_modes[] = {
+ 		.fll_def = 1308,
+ 		.fll_min = 1308,
+ 		.llp = 2328,
++		/* 2x2 binned window at (8, 408), then a digital crop at (208, 108) */
++		.crop = {
++			.left = 424,
++			.top = 624,
++			.width = 3856,
++			.height = 2176,
++		},
+ 		.default_mode_regs = mode_1928x1088_regs,
+ 		.default_mode_regs_length = ARRAY_SIZE(mode_1928x1088_regs),
+ 	},
+@@ -432,6 +442,7 @@ static int imx471_set_pad_format(struct v4l2_subdev *sd,
+ 	imx471_update_pad_format(sensor, mode, fmt);
+ 
+ 	*v4l2_subdev_state_get_format(sd_state, fmt->pad) = fmt->format;
++	*v4l2_subdev_state_get_crop(sd_state, fmt->pad) = mode->crop;
+ 
+ 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
+ 		return 0;
+@@ -463,7 +474,7 @@ static int imx471_get_selection(struct v4l2_subdev *sd,
+ 	switch (sel->target) {
+ 	case V4L2_SEL_TGT_CROP:
+ 		sel->r = *v4l2_subdev_state_get_crop(sd_state, sel->pad);
+-		break;
++		return 0;
+ 
+ 	case V4L2_SEL_TGT_NATIVE_SIZE:
+ 		sel->r.top = 0;

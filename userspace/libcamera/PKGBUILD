@@ -1,0 +1,59 @@
+# OnePlus 9 Pro build of libcamera with the patches from this folder.
+# Replaces Arch's libcamera and libcamera-ipa. The stock libcamera-tools,
+# gst-plugin-libcamera and pipewire-libcamera packages keep working with it.
+# Based on https://gitlab.archlinux.org/archlinux/packaging/packages/libcamera
+
+pkgname=libcamera-op9
+_pkgname=libcamera
+pkgver=0.7.2
+pkgrel=1
+pkgdesc="A complex camera support library for Linux (OnePlus 9 Pro patches)"
+arch=(aarch64)
+url="https://libcamera.org/"
+license=(Apache-2.0 CC0-1.0 'GPL-2.0-only WITH Linux-syscall-note' GPL-2.0-or-later
+         LGPL-2.1-or-later BSD-2-Clause)
+depends=(glibc gnutls libelf libgcc libglvnd libstdc++ libunwind libyaml libyuv sh
+         systemd-libs libudev.so)
+makedepends=(git libdrm libjpeg-turbo libtiff meson openssl python-jinja python-ply python-pyyaml systemd)
+provides=("libcamera=$pkgver" "libcamera-ipa=$pkgver" libcamera.so libcamera-base.so)
+conflicts=(libcamera libcamera-ipa)
+# Meson strips before it signs the IPA modules; makepkg stripping would break the signatures
+options=(!strip)
+source=("git+https://git.libcamera.org/libcamera/libcamera.git#tag=v$pkgver"
+        0001-libcamera-software_isp-debayer_egl-centre-the-scaled.patch
+        0002-libipa-camera_sensor_helper-add-OnePlus-9-Pro-sensor.patch
+        0003-ipa-simple-add-contrast-detection-auto-focus.patch)
+b2sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  cd $_pkgname
+  for p in ../0*.patch; do patch -Np1 < "$p"; done
+  # utils/gen-version.sh reads this
+  printf "%s\n" "$pkgver" > .tarball-version
+}
+
+build() {
+  # Only what this phone uses, plus USB webcams. GCC 16 warns in libcamera's own headers.
+  arch-meson $_pkgname build \
+    -D pipelines=simple,uvcvideo \
+    -D ipas=simple \
+    -D v4l2=enabled \
+    -D werror=false \
+    -D tracing=disabled \
+    -D test=false \
+    -D documentation=disabled \
+    -D gstreamer=disabled \
+    -D pycamera=disabled \
+    -D cam=disabled \
+    -D qcam=disabled \
+    -D lc-compliance=disabled
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir" --strip
+  # Ships in the stock libcamera-tools
+  rm "$pkgdir/usr/bin/libcamera-bug-report"
+  install -vDm 644 $_pkgname/LICENSES/{BSD-3-Clause,Linux-syscall-note,MIT}.txt \
+    -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

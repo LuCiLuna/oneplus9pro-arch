@@ -1,0 +1,563 @@
+From 73bcd4c8f835326e8e8a276b291bb19c111acc9b Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 09:56:45 +0000
+Subject: [PATCH 091/114] HACK: power: qcom_battmgr: OnePlus charging policy
+ for USB-C PD
+
+The OnePlus charger firmware leaves all charging policy to the AP, which
+Android keeps in oplus_chg: VBUS stays at 5 V and battery current at
+500 mA unless told otherwise, and the firmware cannot see the temperature
+of the battery, since the gauge sits on an AP I2C bus.
+
+Add that policy, enabled by the new oplus,fuel-gauge DT property:
+- PD chargers: ask for 9 V once the partner's SVID is known (or after
+  three polls), with an input limit of 2 A or what the charger offers.
+- DCP and 5 V PD: climb the input limit to 2 A, CDP to 1.5 A, backing off
+  if VBUS sags under 4.4 V. SDP stays at the firmware's 500 mA.
+- Battery current and float voltage by gauge temperature, from the vendor
+  DT limits: no charging under 0 C or over 50 C, 600 mA/8.24 V from 47 C,
+  3 A at 16-47 C (1.1 A on 5 V). The firmware's lower 8.7 V float voltage
+  stays, instead of the vendor's 8.87 V, for the worn battery.
+- Stop at full (under 150 mA near the float voltage: the gauge expects a
+  higher one, so doesn't report full), recharge below 8.5 V.
+- Stay awake while charging, as nothing watches temperature in suspend.
+
+Report the adapter type in usb_type: the firmware's USB_TYPE stays at the
+BC1.2 result even on PD. Add a raw bat_prop debugfs next to usb_prop.
+
+Tested with a PD charger: 8.84 V at the phone, 2.77 A offered.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     |   1 +
+ drivers/power/supply/qcom_battmgr.c           | 379 +++++++++++++++++-
+ 2 files changed, 358 insertions(+), 22 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index f64bbf847e1..0a388a9a301 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -900,6 +900,7 @@ &vamacro {
+  * OnePlus charger firmware asks for over pmic_glink.
+  */
+ &pmic_glink {
++	oplus,fuel-gauge = <&bq27541>;
+ 	oplus,otg-boost-gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
+ 	oplus,otg-wrx-en-gpios = <&pm8350c_gpios 6 GPIO_ACTIVE_HIGH>;
+ 	pinctrl-0 = <&otg_boost_default>, <&otg_wrx_en_default>;
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index e926ca18945..dee91231b6e 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -50,11 +50,14 @@ enum qcom_battmgr_variant {
+ #define NOTIF_OPLUS_USB_NO_PRESENT	0x3f
+ #define NOTIF_OPLUS_OTG_ENABLE		0x46
+ #define NOTIF_OPLUS_OTG_DISABLE		0x47
++#define NOTIF_OPLUS_SVID		0x48
++#define NOTIF_OTHER_SVID		0x49
+ 
+ /* OnePlus (oplus) firmware USB properties */
+ #define OPLUS_USB_OTG_EN		19
+ #define OPLUS_USB_OTG_AP_ENABLE		22
+ #define OPLUS_USB_OTG_SWITCH		23
++#define OPLUS_USB_SET_PDO		16
+ 
+ #define BATTMGR_BAT_INFO		0x9
+ 
+@@ -357,9 +360,29 @@ struct qcom_battmgr {
+ 	struct work_struct otg_work;
+ 	bool otg_on;
+ 
+-	/* HACK: raw USB property access for OnePlus OTG bring-up */
+-	u32 dbg_usb_prop;
+-	u32 dbg_usb_value;
++	/* OnePlus charging policy, which Android keeps on the AP side */
++	struct power_supply *gauge;
++	struct delayed_work chg_work;
++	bool chg_reset;
++	struct {
++		bool svid;
++		bool capped;
++		bool online;
++		bool full;
++		int enabled;
++		int polls;
++		int pdo_tries;
++		int full_polls;
++		int zone;
++		unsigned int icl_step;
++		u32 icl;
++		u32 fcc;
++		u32 fv;
++	} chg;
++
++	/* last property value read; also the HACK raw property access for bring-up */
++	u32 dbg_prop;
++	u32 dbg_value;
+ 
+ 	/*
+ 	 * @lock is used to prevent concurrent power supply requests to the
+@@ -1015,6 +1038,9 @@ static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
+ 		return -EINVAL;
+ 
+ 	prop = sm8350_usb_prop_map[psp];
++	/* OnePlus firmware's USB_TYPE stays at the BC1.2 result, even on PD */
++	if (battmgr->otg_boost && prop == USB_TYPE)
++		prop = USB_ADAP_TYPE;
+ 
+ 	mutex_lock(&battmgr->lock);
+ 	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
+@@ -1259,6 +1285,7 @@ static void qcom_battmgr_notification(struct qcom_battmgr *battmgr,
+ 			goto unknown;
+ 		/* the firmware turns the OTG switch off on every detach */
+ 		schedule_work(&battmgr->otg_work);
++		WRITE_ONCE(battmgr->chg_reset, true);
+ 		fallthrough;
+ 	case NOTIF_OPLUS_USB_ONLINE:
+ 	case NOTIF_OPLUS_USB_PRESENT:
+@@ -1266,6 +1293,14 @@ static void qcom_battmgr_notification(struct qcom_battmgr *battmgr,
+ 		if (!battmgr->otg_boost)
+ 			goto unknown;
+ 		power_supply_changed(battmgr->usb_psy);
++		mod_delayed_work(system_percpu_wq, &battmgr->chg_work, HZ);
++		break;
++	case NOTIF_OPLUS_SVID:
++	case NOTIF_OTHER_SVID:
++		if (!battmgr->otg_boost)
++			goto unknown;
++		WRITE_ONCE(battmgr->chg.svid, true);
++		mod_delayed_work(system_percpu_wq, &battmgr->chg_work, 0);
+ 		break;
+ 	default:
+ unknown:
+@@ -1453,6 +1488,8 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 			battmgr->error = le32_to_cpu(resp->intval.result);
+ 			if (battmgr->error)
+ 				goto out_complete;
++
++			battmgr->dbg_value = le32_to_cpu(resp->intval.value);
+ 		}
+ 
+ 		switch (property) {
+@@ -1545,7 +1582,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		if (battmgr->error)
+ 			goto out_complete;
+ 
+-		battmgr->dbg_usb_value = le32_to_cpu(resp->intval.value);
++		battmgr->dbg_value = le32_to_cpu(resp->intval.value);
+ 
+ 		switch (property) {
+ 		case USB_ONLINE:
+@@ -1567,6 +1604,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 			battmgr->usb.current_limit = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case USB_TYPE:
++		case USB_ADAP_TYPE:
+ 			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		default:
+@@ -1664,6 +1702,7 @@ static void qcom_battmgr_enable_worker(struct work_struct *work)
+ 		mutex_unlock(&battmgr->lock);
+ 		if (ret)
+ 			dev_err(battmgr->dev, "failed to enable OTG: %d\n", ret);
++		mod_delayed_work(system_percpu_wq, &battmgr->chg_work, HZ);
+ 	}
+ }
+ 
+@@ -1710,6 +1749,272 @@ static void qcom_battmgr_otg_off(void *data)
+ 	gpiod_set_value_cansleep(battmgr->otg_wrx_en, 0);
+ }
+ 
++/*
++ * Android runs the charging policy on the AP (oplus_chg): the firmware stays at
++ * 5 V and 500 mA, and does not know the temperature of the battery, which only
++ * the AP can read from the gauge. Take the limits from the vendor device tree,
++ * keeping the firmware's own, lower, float voltage on this worn battery.
++ */
++static const struct {
++	int temp;	/* up to this temperature, in 0.1 C */
++	u32 fcc;	/* uA */
++	u32 fv;		/* uV */
++} qcom_battmgr_chg_zones[] = {
++	{       0,       0, 8700000 },
++	{      50, 1150000, 8700000 },
++	{     120, 1650000, 8700000 },
++	{     160, 2850000, 8700000 },
++	{     470, 3000000, 8700000 },
++	{     500,  600000, 8240000 },
++	{ INT_MAX,       0, 8240000 },
++};
++
++#define CHG_FCC_5V		1100000
++#define CHG_ICL_9V		2000000
++#define CHG_ICL_CDP		1500000
++#define CHG_VBUS_MIN		4400000
++#define CHG_VBUS_HV		8000000
++#define CHG_ITERM		150000
++#define CHG_FULL_POLLS		4
++#define CHG_VFLOAT_MARGIN	50000
++#define CHG_RECHARGE_VOLT	8500000
++#define CHG_POLL_SETTLE		(5 * HZ)
++#define CHG_POLL		(30 * HZ)
++
++static const u32 qcom_battmgr_chg_icl_steps[] = { 500000, 900000, 1200000, 1500000, 2000000 };
++
++static void qcom_battmgr_put_gauge(void *data)
++{
++	struct qcom_battmgr *battmgr = data;
++
++	cancel_delayed_work_sync(&battmgr->chg_work);
++	power_supply_put(battmgr->gauge);
++}
++
++static int qcom_battmgr_chg_get(struct qcom_battmgr *battmgr, int prop, u32 *val)
++{
++	int ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
++
++	if (!ret)
++		*val = battmgr->dbg_value;
++
++	return ret;
++}
++
++static int qcom_battmgr_chg_zone(struct qcom_battmgr *battmgr, int temp)
++{
++	int zone = 0;
++
++	while (temp > qcom_battmgr_chg_zones[zone].temp)
++		zone++;
++
++	/* 1 C of hysteresis on the way back down */
++	if (battmgr->chg.zone > zone && temp > qcom_battmgr_chg_zones[zone].temp - 10)
++		zone = battmgr->chg.zone;
++
++	return zone;
++}
++
++/* Input current on 5 V: there is no contract, so climb until VBUS starts to sag */
++static void qcom_battmgr_chg_climb_icl(struct qcom_battmgr *battmgr, u32 vbus, u32 target,
++				       u32 *icl, bool *climbing)
++{
++	const u32 *steps = qcom_battmgr_chg_icl_steps;
++	unsigned int step = battmgr->chg.icl_step;
++
++	if (vbus < CHG_VBUS_MIN) {
++		if (step)
++			step--;
++		battmgr->chg.capped = true;
++	} else if (!battmgr->chg.capped && step + 1 < ARRAY_SIZE(qcom_battmgr_chg_icl_steps) &&
++		   steps[step + 1] <= target) {
++		step++;
++		*climbing = true;
++	}
++	battmgr->chg.icl_step = step;
++	*icl = steps[step];
++}
++
++static void qcom_battmgr_chg_worker(struct work_struct *work)
++{
++	struct qcom_battmgr *battmgr = container_of(to_delayed_work(work), struct qcom_battmgr,
++						    chg_work);
++	union power_supply_propval temp, volt, curr, status;
++	u32 online, type, vbus, vmax, cmax, icl = 0, fcc, fv;
++	unsigned long next = CHG_POLL;
++	bool pd, hv, detach, climbing = false, enable;
++	int zone, ret;
++
++	if (!battmgr->service_up)
++		return;
++
++	if (!battmgr->gauge) {
++		struct power_supply *gauge;
++
++		gauge = power_supply_get_by_reference(dev_fwnode(battmgr->dev),
++						      "oplus,fuel-gauge");
++		if (IS_ERR(gauge))
++			return;
++		if (!gauge) {
++			schedule_delayed_work(&battmgr->chg_work, CHG_POLL_SETTLE);
++			return;
++		}
++		if (devm_add_action(battmgr->dev, qcom_battmgr_put_gauge, battmgr)) {
++			power_supply_put(gauge);
++			return;
++		}
++		battmgr->gauge = gauge;
++	}
++
++	mutex_lock(&battmgr->lock);
++
++	detach = xchg(&battmgr->chg_reset, false);
++	if (detach)
++		goto reset;
++
++	ret = qcom_battmgr_chg_get(battmgr, USB_ONLINE, &online);
++	if (ret)
++		goto out;
++	if (!online)
++		goto reset;
++
++	if (!battmgr->chg.online) {
++		battmgr->chg.online = true;
++		battmgr->chg.enabled = -1;
++		battmgr->chg.zone = -1;
++		pm_stay_awake(battmgr->dev);
++	}
++
++	/* no temperature, no fast charging: stay at the firmware's defaults */
++	ret = power_supply_get_property(battmgr->gauge, POWER_SUPPLY_PROP_TEMP, &temp);
++	if (!ret)
++		ret = power_supply_get_property(battmgr->gauge, POWER_SUPPLY_PROP_VOLTAGE_NOW, &volt);
++	if (!ret)
++		ret = power_supply_get_property(battmgr->gauge, POWER_SUPPLY_PROP_CURRENT_NOW, &curr);
++	if (!ret)
++		ret = power_supply_get_property(battmgr->gauge, POWER_SUPPLY_PROP_STATUS, &status);
++	if (ret)
++		goto out;
++
++	ret = qcom_battmgr_chg_get(battmgr, USB_ADAP_TYPE, &type);
++	if (!ret)
++		ret = qcom_battmgr_chg_get(battmgr, USB_VOLT_NOW, &vbus);
++	if (!ret)
++		ret = qcom_battmgr_chg_get(battmgr, USB_VOLT_MAX, &vmax);
++	if (ret)
++		goto out;
++
++	pd = type == POWER_SUPPLY_USB_TYPE_PD || type == POWER_SUPPLY_USB_TYPE_PD_DRP ||
++	     type == POWER_SUPPLY_USB_TYPE_PD_PPS;
++	hv = vmax >= CHG_VBUS_HV;
++
++	/* the firmware reports the partner's SVID first; not all chargers answer */
++	if (pd && !hv && battmgr->chg.pdo_tries < 3 &&
++	    (READ_ONCE(battmgr->chg.svid) || battmgr->chg.polls >= 3)) {
++		battmgr->chg.pdo_tries++;
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
++						    OPLUS_USB_SET_PDO, 9000);
++		if (!ret) {
++			msleep(500);
++			ret = qcom_battmgr_chg_get(battmgr, USB_VOLT_MAX, &vmax);
++		}
++		if (ret)
++			goto out;
++		hv = vmax >= CHG_VBUS_HV;
++	}
++
++	if (hv) {
++		ret = qcom_battmgr_chg_get(battmgr, USB_CURR_MAX, &cmax);
++		if (ret)
++			goto out;
++		icl = cmax ? min(cmax, CHG_ICL_9V) : CHG_ICL_9V;
++	} else if (type == POWER_SUPPLY_USB_TYPE_DCP || pd) {
++		qcom_battmgr_chg_climb_icl(battmgr, vbus, CHG_ICL_9V, &icl, &climbing);
++	} else if (type == POWER_SUPPLY_USB_TYPE_CDP) {
++		qcom_battmgr_chg_climb_icl(battmgr, vbus, CHG_ICL_CDP, &icl, &climbing);
++	}
++
++	if (icl && icl != battmgr->chg.icl) {
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
++						    USB_INPUT_CURR_LIMIT, icl);
++		if (ret)
++			goto out;
++		battmgr->chg.icl = icl;
++	}
++
++	zone = qcom_battmgr_chg_zone(battmgr, temp.intval);
++	battmgr->chg.zone = zone;
++	fv = qcom_battmgr_chg_zones[zone].fv;
++	fcc = qcom_battmgr_chg_zones[zone].fcc;
++	if (!hv)
++		fcc = min_t(u32, fcc, CHG_FCC_5V);
++
++	/* the gauge is set up for a higher float voltage and won't report full */
++	if (status.intval == POWER_SUPPLY_STATUS_FULL ||
++	    (volt.intval >= fv - CHG_VFLOAT_MARGIN && curr.intval >= 0 &&
++	     curr.intval < CHG_ITERM && ++battmgr->chg.full_polls >= CHG_FULL_POLLS))
++		battmgr->chg.full = true;
++	else if (curr.intval >= CHG_ITERM)
++		battmgr->chg.full_polls = 0;
++	if (volt.intval < CHG_RECHARGE_VOLT) {
++		battmgr->chg.full = false;
++		battmgr->chg.full_polls = 0;
++	}
++
++	if (fv != battmgr->chg.fv) {
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
++						    BATT_VOLT_MAX, fv);
++		if (ret)
++			goto out;
++		battmgr->chg.fv = fv;
++	}
++
++	if (fcc != battmgr->chg.fcc) {
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
++						    BATT_CHG_CTRL_LIM, fcc);
++		if (ret)
++			goto out;
++		battmgr->chg.fcc = fcc;
++		dev_info(battmgr->dev,
++			 "charging: type %u, %u mV, input %u mA, battery %u mA, %d.%d C\n",
++			 type, vmax / 1000, battmgr->chg.icl / 1000, fcc / 1000,
++			 temp.intval / 10, abs(temp.intval) % 10);
++	}
++
++	enable = fcc && !battmgr->chg.full;
++	if (enable != battmgr->chg.enabled) {
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
++						    BATT_CHG_CTRL_EN, enable);
++		if (ret)
++			goto out;
++		if (battmgr->chg.enabled >= 0)
++			dev_info(battmgr->dev, "charging %s: %d mV, %d mA, %d.%d C\n",
++				 enable ? "resumed" : "stopped", volt.intval / 1000,
++				 curr.intval / 1000, temp.intval / 10, abs(temp.intval) % 10);
++		battmgr->chg.enabled = enable;
++	}
++
++out:
++	/* -ENXIO: seen for the first seconds of boot, the next poll gets through */
++	if (ret && ret != -ENXIO)
++		dev_err(battmgr->dev, "charging update failed: %d\n", ret);
++	if (climbing || battmgr->chg.polls < 3)
++		next = CHG_POLL_SETTLE;
++	battmgr->chg.polls++;
++	mutex_unlock(&battmgr->lock);
++	schedule_delayed_work(&battmgr->chg_work, next);
++	return;
++
++reset:
++	if (battmgr->chg.online)
++		pm_relax(battmgr->dev);
++	memset(&battmgr->chg, 0, sizeof(battmgr->chg));
++	mutex_unlock(&battmgr->lock);
++	/* could already be a new attach, whose notifications raced with this */
++	if (detach)
++		schedule_delayed_work(&battmgr->chg_work, CHG_POLL_SETTLE);
++}
++
+ static void qcom_battmgr_pdr_notify(void *priv, int state)
+ {
+ 	struct qcom_battmgr *battmgr = priv;
+@@ -1738,11 +2043,11 @@ static char *qcom_battmgr_battery[] = { "battery" };
+ /*
+  * HACK: "echo <id> > usb_prop" reads a USB property by its firmware index,
+  * "echo <id> <value> > usb_prop" writes one; cat shows the last value read.
++ * bat_prop does the same for battery properties.
+  */
+-static ssize_t qcom_battmgr_dbg_usb_write(struct file *file, const char __user *ubuf,
+-					  size_t count, loff_t *ppos)
++static ssize_t qcom_battmgr_dbg_write(struct qcom_battmgr *battmgr, const char __user *ubuf,
++				      size_t count, unsigned int get, unsigned int set)
+ {
+-	struct qcom_battmgr *battmgr = ((struct seq_file *)file->private_data)->private;
+ 	char buf[32];
+ 	u32 prop, value;
+ 	int n, ret;
+@@ -1758,46 +2063,68 @@ static ssize_t qcom_battmgr_dbg_usb_write(struct file *file, const char __user *
+ 		return -EINVAL;
+ 
+ 	mutex_lock(&battmgr->lock);
+-	battmgr->dbg_usb_prop = prop;
++	battmgr->dbg_prop = prop;
+ 	if (n == 2)
+-		ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
+-						    prop, value);
++		ret = qcom_battmgr_request_property(battmgr, set, prop, value);
+ 	else
+-		ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET,
+-						    prop, 0);
++		ret = qcom_battmgr_request_property(battmgr, get, prop, 0);
+ 	mutex_unlock(&battmgr->lock);
+-	dev_info(battmgr->dev, "usb prop %u %s %u: %d\n", prop,
+-		 n == 2 ? "set" : "get", n == 2 ? value : battmgr->dbg_usb_value, ret);
++	dev_info(battmgr->dev, "prop %#x/%u %s %u: %d\n", get, prop,
++		 n == 2 ? "set" : "get", n == 2 ? value : battmgr->dbg_value, ret);
+ 
+ 	return ret ? ret : count;
+ }
+ 
+-static int qcom_battmgr_dbg_usb_show(struct seq_file *s, void *unused)
++static ssize_t qcom_battmgr_dbg_usb_write(struct file *file, const char __user *ubuf,
++					  size_t count, loff_t *ppos)
++{
++	return qcom_battmgr_dbg_write(((struct seq_file *)file->private_data)->private, ubuf, count,
++				      BATTMGR_USB_PROPERTY_GET, BATTMGR_USB_PROPERTY_SET);
++}
++
++static ssize_t qcom_battmgr_dbg_bat_write(struct file *file, const char __user *ubuf,
++					  size_t count, loff_t *ppos)
++{
++	return qcom_battmgr_dbg_write(((struct seq_file *)file->private_data)->private, ubuf, count,
++				      BATTMGR_BAT_PROPERTY_GET, BATTMGR_BAT_PROPERTY_SET);
++}
++
++static int qcom_battmgr_dbg_show(struct seq_file *s, void *unused)
+ {
+ 	struct qcom_battmgr *battmgr = s->private;
+ 
+-	seq_printf(s, "%u %u\n", battmgr->dbg_usb_prop, battmgr->dbg_usb_value);
++	seq_printf(s, "%u %u\n", battmgr->dbg_prop, battmgr->dbg_value);
+ 
+ 	return 0;
+ }
+ 
+-static int qcom_battmgr_dbg_usb_open(struct inode *inode, struct file *file)
++static int qcom_battmgr_dbg_open(struct inode *inode, struct file *file)
+ {
+-	return single_open(file, qcom_battmgr_dbg_usb_show, inode->i_private);
++	return single_open(file, qcom_battmgr_dbg_show, inode->i_private);
+ }
+ 
+ static const struct file_operations qcom_battmgr_dbg_usb_fops = {
+ 	.owner = THIS_MODULE,
+-	.open = qcom_battmgr_dbg_usb_open,
++	.open = qcom_battmgr_dbg_open,
+ 	.read = seq_read,
+ 	.write = qcom_battmgr_dbg_usb_write,
+ 	.llseek = seq_lseek,
+ 	.release = single_release,
+ };
+ 
++static const struct file_operations qcom_battmgr_dbg_bat_fops = {
++	.owner = THIS_MODULE,
++	.open = qcom_battmgr_dbg_open,
++	.read = seq_read,
++	.write = qcom_battmgr_dbg_bat_write,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
+ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			      const struct auxiliary_device_id *id)
+ {
++	struct dentry *dbg;
+ 	const struct power_supply_desc *psy_desc;
+ 	struct power_supply_config psy_cfg_supply = {};
+ 	struct power_supply_config psy_cfg = {};
+@@ -1913,6 +2240,14 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 					   qcom_battmgr_otg_worker);
+ 		if (ret)
+ 			return ret;
++
++		ret = devm_delayed_work_autocancel(dev, &battmgr->chg_work,
++						   qcom_battmgr_chg_worker);
++		if (ret)
++			return ret;
++
++		/* no temperature monitoring while suspended: stay up while charging */
++		device_init_wakeup(dev, true);
+ 	}
+ 
+ 	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
+@@ -1924,9 +2259,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 
+ 	pmic_glink_client_register(battmgr->client);
+ 
+-	debugfs_create_file("usb_prop", 0600,
+-			    debugfs_create_dir("qcom_battmgr", NULL),
+-			    battmgr, &qcom_battmgr_dbg_usb_fops);
++	dbg = debugfs_create_dir("qcom_battmgr", NULL);
++	debugfs_create_file("usb_prop", 0600, dbg, battmgr, &qcom_battmgr_dbg_usb_fops);
++	debugfs_create_file("bat_prop", 0600, dbg, battmgr, &qcom_battmgr_dbg_bat_fops);
+ 
+ 	return 0;
+ }

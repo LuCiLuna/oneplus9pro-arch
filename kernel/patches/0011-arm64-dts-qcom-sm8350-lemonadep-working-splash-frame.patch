@@ -1,0 +1,52 @@
+From 1f517f78340bfed06f41e6efc97a91eaee895f36 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 09:23:06 +0000
+Subject: [PATCH 011/114] arm64: dts: qcom: sm8350-lemonadep: working splash
+ framebuffer console
+
+ABL scans the splash at 1080x2412 (VIG0+VIG1 540-wide halves, stride
+1080 * 4) even though the panel is 1440x3216, so keep the common geometry.
+Disable dispcc for bring-up (its probe reprograms the display PLL and kills
+the ABL display) and vote MMCX from the framebuffer node.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 20 +++++++++++++++----
+ 1 file changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 78f09af8dfd..2fc3cb3929c 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -38,11 +38,14 @@ &display_panel {
+ 	status = "fail";
+ };
+ 
+-/* 9 Pro panel is 1440x3216; bootloader splash stays at the same address as on the 9 */
++/*
++ * ABL drives the 1440x3216 panel in its 1080x2412 (FHD+) mode and scans the
++ * splash from VIG0+VIG1 (540-wide halves, stride 1080 * 4), so keep the
++ * common 1080x2412 framebuffer and only vote the display rail.
++ */
+ &framebuffer {
+-	width = <1440>;
+-	height = <3216>;
+-	stride = <(1440 * 4)>;
++	/* BRING-UP: keep the display rail voted while running on the ABL splash */
++	power-domains = <&rpmhpd RPMHPD_MMCX>;
+ };
+ 
+ &mpss {
+@@ -80,3 +83,12 @@ tp_rst_suspend: tp-rst-suspend-state {
+ &usb_1_dwc3 {
+ 	dr_mode = "peripheral";
+ };
++
++/*
++ * BRING-UP ONLY: dispcc reprograms the display PLL on probe, which kills the
++ * display ABL left running for simple-framebuffer. Re-enable together with
++ * the real MDSS/panel driver.
++ */
++&dispcc {
++	status = "disabled";
++};

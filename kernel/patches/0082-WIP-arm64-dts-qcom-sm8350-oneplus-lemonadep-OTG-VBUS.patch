@@ -1,0 +1,61 @@
+From f632f607dc2affeb9a8bcdbbc089494090a56934 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 06:12:31 +0000
+Subject: [PATCH 082/114] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep: OTG
+ VBUS boost GPIO
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm8350-oneplus-common.dtsi   |  2 +-
+ .../boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 18 ++++++++++++++++++
+ 2 files changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index 61e509c6619..0788182a725 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -103,7 +103,7 @@ key-vol-down {
+ 		};
+ 	};
+ 
+-	pmic-glink {
++	pmic_glink: pmic-glink {
+ 		compatible = "qcom,sm8350-pmic-glink", "qcom,pmic-glink";
+ 		/* the ADSP battery reads 0%; the bq27541 gauges the cells */
+ 		qcom,no-battery;
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 649f7605641..831f1524d05 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -873,6 +873,16 @@ &vamacro {
+ };
+ 
+ /* Speaker amplifiers: tertiary MI2S, SD1 out to the amps, SD0 feedback in */
++/*
++ * OTG VBUS comes from an external boost enabled by GPIO 8, which the
++ * OnePlus charger firmware asks for over pmic_glink.
++ */
++&pmic_glink {
++	oplus,otg-boost-gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
++	pinctrl-0 = <&otg_boost_default>;
++	pinctrl-names = "default";
++};
++
+ &q6afedai {
+ 	dai@20 {
+ 		reg = <TERTIARY_MI2S_RX>;
+@@ -881,6 +891,14 @@ dai@20 {
+ };
+ 
+ &tlmm {
++	otg_boost_default: otg-boost-default-state {
++		pins = "gpio8";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-down;
++		output-low;
++	};
++
+ 	tert_mi2s_active: tert-mi2s-active-state {
+ 		sck-pins {
+ 			pins = "gpio120";

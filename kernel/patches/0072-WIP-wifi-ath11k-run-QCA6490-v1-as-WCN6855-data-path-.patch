@@ -1,0 +1,40 @@
+From f3acfb73e9918cf78423b3b03a7142c9c75ce95a Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 02:31:36 +0000
+Subject: [PATCH 072/114] WIP: wifi: ath11k: run QCA6490 v1 as WCN6855, data
+ path works
+
+With the firmware RAM and regulatory problems out of the way the v1
+part runs with the full WCN6855 parameters (op9_profile=0): its RX
+descriptors and REO setup are WCN6855's, and with the QCA6390 ones
+every REO error descriptor failed to parse and nothing was received.
+CFR stays off to save firmware memory.
+
+Tested: scan on 2.4/5/6 GHz, association, DHCP and HTTP on a 6 GHz
+160 MHz HE network.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/wireless/ath/ath11k/core.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath11k/core.c b/drivers/net/wireless/ath/ath11k/core.c
+index 41860904b82..be9fe5c2ad7 100644
+--- a/drivers/net/wireless/ath/ath11k/core.c
++++ b/drivers/net/wireless/ath/ath11k/core.c
+@@ -2631,12 +2631,13 @@ static int ath11k_init_hw_params(struct ath11k_base *ab)
+ 	 * (UMAC rings and copy engines; checked against the vendor fw-api
+ 	 * qca6490/v1 headers), with the rest of QCA6390's parameters.
+ 	 */
+-	if (ab->qcom_platform && ab->hw_rev == ATH11K_HW_QCA6390_HW20) {
++	if (ab->qcom_platform) {
+ 		ab->hw_params.regs = &wcn6855_regs;
+ 		ab->hw_params.fix_l1ss = false;
++		ab->hw_params.cfr_support = false;
+ 		/* the v1 firmware runs out of RAM on 17 vdevs; the vendor driver asks for 4 */
+ 		ab->hw_params.num_vdevs = 4;
+-		ath11k_info(ab, "QCA6490 v1: QCA6390 parameters with the WCN6855 register map\n");
++		ath11k_info(ab, "QCA6490 v1: WCN6855 register map, v1 firmware limits\n");
+ 	}
+ 
+ 	ath11k_info(ab, "%s\n", ab->hw_params.name);

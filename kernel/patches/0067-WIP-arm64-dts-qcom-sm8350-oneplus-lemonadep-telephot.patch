@@ -1,0 +1,41 @@
+From 789c56c56d793c995c0b1e2568c5150398869efb Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:11:32 +0000
+Subject: [PATCH 067/114] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep:
+ telephoto focus motor
+
+AK7377 at 0x0f on CCI1 bus 0, VAF from pm8008i L4.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index e5a5d1ff472..3109f138574 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -525,6 +525,8 @@ camera@36 {
+ 		avdd-supply = <&vreg_cam_tele_avdd>;
+ 		dvdd-supply = <&vreg_l1i>;
+ 
++		lens-focus = <&tele_vcm>;
++
+ 		rotation = <270>;
+ 		orientation = <1>;
+ 
+@@ -537,6 +539,14 @@ ov08a10_ep: endpoint {
+ 		};
+ 	};
+ 
++	/* Telephoto camera focus motor, AKM AK7377 */
++	tele_vcm: focus@f {
++		compatible = "asahi-kasei,ak7375";
++		reg = <0x0f>;
++		vdd-supply = <&vreg_l4i>;
++		vio-supply = <&vreg_l5i>;
++	};
++
+ 	/* Telephoto module calibration */
+ 	eeprom@50 {
+ 		compatible = "atmel,24c128";

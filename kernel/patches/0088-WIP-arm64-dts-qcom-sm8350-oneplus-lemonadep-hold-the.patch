@@ -1,0 +1,47 @@
+From b2526726196678e543e47b1c13bfb17ee13a3ee0 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 08:42:41 +0000
+Subject: [PATCH 088/114] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep: hold
+ the splash clocks in simple-framebuffer
+
+simpledrm now keeps the MDSS GDSC and the display clocks ABL runs the
+splash with enabled until msm takes over, so MDSS runtime PM during msm
+probe can't switch them off under the panel. Boot is glitch free from
+ABL through the console to the msm takeover.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 4c8b18dadfb..3111cf0046e 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -780,8 +780,25 @@ &framebuffer {
+ 	 * once rpmhpd reaches sync_state, an unleveled vote lets MMCX drop and
+ 	 * the display pipeline stalls.
+ 	 */
+-	power-domains = <&rpmhpd RPMHPD_MMCX>;
++	power-domains = <&rpmhpd RPMHPD_MMCX>,
++			<&dispcc MDSS_GDSC>;
+ 	required-opps = <&rpmhpd_opp_turbo>;
++
++	/*
++	 * Hold the clocks ABL runs the splash with until msm takes over, so
++	 * MDSS runtime PM during msm probe can't switch them off under the
++	 * running command mode panel.
++	 */
++	clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
++		 <&gcc GCC_DISP_SF_AXI_CLK>,
++		 <&dispcc DISP_CC_MDSS_AHB_CLK>,
++		 <&dispcc DISP_CC_MDSS_MDP_CLK>,
++		 <&dispcc DISP_CC_MDSS_MDP_LUT_CLK>,
++		 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
++		 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
++		 <&dispcc DISP_CC_MDSS_BYTE0_INTF_CLK>,
++		 <&dispcc DISP_CC_MDSS_PCLK0_CLK>,
++		 <&dispcc DISP_CC_MDSS_ESC0_CLK>;
+ };
+ 
+ &mpss {

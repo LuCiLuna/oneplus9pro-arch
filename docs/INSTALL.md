@@ -151,6 +151,8 @@ To reach the bootloader again from Linux, run `systemctl reboot --reboot-argumen
 
 Share your PC's internet over USB with `scripts/op9-nat.sh`, then log in from your PC. Arch Linux
 ARM's defaults are `alarm/alarm` and `root/root`. **Change both, especially before using Wi-Fi.**
+Phosh runs as the account with UID 1000, which is `alarm`. To use another account, change
+`User=` in `/etc/systemd/system/phosh.service`.
 
 ```sh
 ssh alarm@172.16.42.1
@@ -165,8 +167,6 @@ pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gn
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
     libnotify
-groupadd -r fastrpc
-chown -R fastrpc:fastrpc /usr/share/qcom/sm8350/OnePlus/lemonade/sensors/registry
 systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful
 systemctl set-default graphical.target
 ```
@@ -178,6 +178,15 @@ Cross-compile them statically and put them in `/usr/local/bin`:
 aarch64-linux-gnu-gcc -static -O2 -o touchboost tools/touchboost.c
 aarch64-linux-gnu-gcc -static -O2 -o op9-slot tools/op9-slot.c
 aarch64-linux-gnu-gcc -static -O2 -o alert-slider tools/alert-slider.c
+```
+
+**Don't skip `op9-slot`.** On every boot, `op9-boot-successful` uses it to tell the bootloader
+the slot booted fine. Without it, the bootloader counts down that slot's retries. After about
+seven boots it marks the slot unbootable and switches to the other one, which looks like a brick.
+If `op9-slot` is missing, the service fails and logs an error to the kernel log. Check with:
+
+```sh
+sudo op9-slot show     # the slot you booted should say successful=1
 ```
 
 Then, logged in as `alarm`, turn on the alert slider and the charging notification. The `gsettings`
@@ -196,16 +205,37 @@ gsettings set sm.puri.phosh.notifications wakeup-screen-categories "['device.add
 
 ## 8. Patched packages
 
-These apply on top of the Arch packages. Add `IgnorePkg = wlroots0.20 phoc` to `/etc/pacman.conf`
-so updates don't replace the patched versions.
+Five programs need patches. Each folder in `userspace/` has a `PKGBUILD` that builds a package
+named `<name>-op9`, which replaces the stock Arch package. Build them on the phone as `alarm`:
 
-| Folder | Base version | Why it's needed |
-|---|---|---|
-| `userspace/wlroots` | 0.20.2 | Without it, wlroots rejects Phosh's home bar and Phosh crashes |
-| `userspace/phoc` | 0.57.0 | Layout stalls, and display modes other than the preferred one |
-| `userspace/libcamera` | 0.7.2 | Correct white balance, sensor support and autofocus |
-| `userspace/hexagonrpc` | [linux-msm/hexagonrpc](https://github.com/linux-msm/hexagonrpc) | Sensors: lets the DSP read and write its registry |
-| `userspace/iio-sensor-proxy` | 3.9 | Auto-rotate |
+```sh
+sudo pacman -S --needed base-devel git
+cp -r userspace ~/op9-pkgs
+for d in hexagonrpc iio-sensor-proxy wlroots phoc libcamera; do
+    (cd ~/op9-pkgs/$d && makepkg -si --nocheck) || break
+done
+```
+
+`makepkg -si` asks before replacing each stock package. Answer yes. The whole set takes about
+5 minutes on the phone. Pacman won't replace an `-op9` package with the stock one on updates. If
+a later Arch update needs a newer version, the update stops with a dependency error instead.
+Then update that folder's `pkgver` and patch.
+
+| Folder | Package | Base version | Why it's needed |
+|---|---|---|---|
+| `userspace/wlroots` | `wlroots0.20-op9` | 0.20.2 | Without it, wlroots rejects Phosh's home bar and Phosh crashes |
+| `userspace/phoc` | `phoc-op9` | 0.57.0 | Layout stalls, and display modes other than the preferred one |
+| `userspace/libcamera` | `libcamera-op9` | 0.7.2 | Correct white balance, sensor support and autofocus. Replaces `libcamera` and `libcamera-ipa` |
+| `userspace/hexagonrpc` | `hexagonrpc-op9` | [linux-msm/hexagonrpc](https://github.com/linux-msm/hexagonrpc) `da7a374` | Sensors: lets the DSP read and write its registry. Also creates the `fastrpc` user |
+| `userspace/iio-sensor-proxy` | `iio-sensor-proxy-op9` | 3.9 | Auto-rotate |
+
+After `hexagonrpc-op9` is installed, give the sensor registry to its user and start the sensors:
+
+```sh
+sudo chown -R fastrpc:fastrpc /usr/share/qcom/sm8350/OnePlus/lemonade/sensors/registry
+sudo systemctl enable --now hexagonrpcd-sdsp
+sudo systemctl restart iio-sensor-proxy
+```
 
 ## 9. Firefox hardware video decoding
 

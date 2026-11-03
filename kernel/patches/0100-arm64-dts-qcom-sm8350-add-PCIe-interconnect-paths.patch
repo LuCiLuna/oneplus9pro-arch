@@ -1,0 +1,41 @@
+From 6a5a7acd2f62ccec6d55cff597f21052d22b9d79 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 14:29:18 -0600
+Subject: [PATCH 100/114] arm64: dts: qcom: sm8350: add PCIe interconnect paths
+
+Neither PCIe controller has interconnects, so pcie-qcom votes for nothing.
+Once sync_state drops the boot votes the PCIe path to DDR has no bandwidth
+vote, and QCA6490 reads of host memory end in Completion Timeouts followed
+by Wi-Fi firmware crashes (MHI_CB_EE_RDDM) that recovery can't get out of.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350.dtsi | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350.dtsi b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+index 8b2490b6c98..6ca17c6a090 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+@@ -1586,6 +1586,10 @@ pcie0: pcie@1c00000 {
+ 			resets = <&gcc GCC_PCIE_0_BCR>;
+ 			reset-names = "pci";
+ 
++			interconnects = <&aggre2_noc MASTER_PCIE_0 0 &mc_virt SLAVE_EBI1 0>,
++					<&gem_noc MASTER_APPSS_PROC 0 &config_noc SLAVE_PCIE_0 0>;
++			interconnect-names = "pcie-mem", "cpu-pcie";
++
+ 			power-domains = <&gcc PCIE_0_GDSC>;
+ 
+ 			phys = <&pcie0_phy>;
+@@ -1695,6 +1699,10 @@ pcie1: pcie@1c08000 {
+ 			resets = <&gcc GCC_PCIE_1_BCR>;
+ 			reset-names = "pci";
+ 
++			interconnects = <&aggre2_noc MASTER_PCIE_1 0 &mc_virt SLAVE_EBI1 0>,
++					<&gem_noc MASTER_APPSS_PROC 0 &config_noc SLAVE_PCIE_1 0>;
++			interconnect-names = "pcie-mem", "cpu-pcie";
++
+ 			power-domains = <&gcc PCIE_1_GDSC>;
+ 
+ 			phys = <&pcie1_phy>;

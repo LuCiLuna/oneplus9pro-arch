@@ -1,6 +1,16 @@
 #!/bin/sh
 # Mark the A/B slot we booted from as successful (like Android update_verifier/boot_control),
-# so ABL keeps booting it instead of counting down its retries.
+# so ABL keeps booting it instead of counting down its retries. If this never runs, ABL marks
+# the slot unbootable after a few boots and switches to the other slot, which looks like a brick.
+warn() {
+	echo "op9-boot-successful: $*" >&2
+	echo "<2>op9-boot-successful: $*" > /dev/kmsg 2>/dev/null
+}
 slot=$(sed -n "s/.*androidboot.slot_suffix=_\([ab]\).*/\1/p" /proc/cmdline)
-[ -n "$slot" ] || { echo "no androidboot.slot_suffix"; exit 1; }
-exec /usr/local/bin/op9-slot mark-successful "$slot" --write
+[ -n "$slot" ] || { warn "no androidboot.slot_suffix on the kernel command line"; exit 1; }
+if [ ! -x /usr/local/bin/op9-slot ]; then
+	warn "/usr/local/bin/op9-slot is missing, so slot $slot is NOT marked successful." \
+	     "The bootloader will switch slots after a few boots. Build it from tools/op9-slot.c."
+	exit 1
+fi
+/usr/local/bin/op9-slot mark-successful "$slot" --write || { warn "marking slot $slot failed"; exit 1; }

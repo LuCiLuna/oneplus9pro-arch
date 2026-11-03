@@ -1,0 +1,45 @@
+From 0938f0e481263d963e00c4794fdc2124aca4a5ec Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 02:28:34 +0000
+Subject: [PATCH 071/114] WIP: arm64: dts: qcom: sm8350-oneplus-lemonadep:
+ Wi-Fi MAC address
+
+The QCA6490 firmware only reports a placeholder address
+(00:03:7f:12:34:56); the vendor stack reads the real one from
+persist/wlan_mac.bin. Let each build give ath11k that address.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi   | 2 +-
+ arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts | 5 +++++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+index 33b659f90ac..3695f8138f7 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-common.dtsi
+@@ -902,7 +902,7 @@ pcieport0: pcie@0 {
+ 		#size-cells = <2>;
+ 		ranges;
+ 
+-		wifi@0 {
++		wifi: wifi@0 {
+ 			compatible = "pci17cb,1103";
+ 			reg = <0x10000 0x0 0x0 0x0 0x0>;
+ 
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 3109f138574..86f10dd3bf7 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -939,6 +939,11 @@ &usb_1_dwc3 {
+ 
+ 
+ /* Not populated on lemonadep (no ACK at 0x0c/0x0d); no camera uses it */
++/* Set by WIFI_MAC in kernel/build.sh; zeros keep the firmware's placeholder */
++&wifi {
++	local-mac-address = [00 00 00 00 00 00];
++};
++
+ /* pm8008i L1 only feeds the telephoto sensor core (DVDD, 1.2 V) */
+ &vreg_l1i {
+ 	regulator-min-microvolt = <1200000>;

@@ -1,0 +1,309 @@
+From 00647c56da8909983e34aa26534028b0dca092a0 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 02:24:46 +0000
+Subject: [PATCH 070/114] WIP: wifi: ath11k: QCA6490 v1 comes up (scan works)
+
+Three things kept the early QCA6490 (HSP 1.1) silicon of the OnePlus 9
+Pro from initialising:
+
+- Register map: the v1 part has the WCN6855 UMAC ring layout (checked
+  against the vendor fw-api qca6490/v1 headers), not QCA6390's. Rings
+  programmed at QCA6390 offsets made the firmware's hardware error
+  interrupt assert as soon as WMI_INIT enabled the UMAC.
+- Firmware RAM: the mobile firmware is far tighter than the LITE builds
+  ath11k targets. With IPA disabled (as the vendor driver does when IPA
+  is not used), no WoW filters and a smaller resource configuration
+  (op9_small_cfg: 3 vdevs, 8 peers, 20 TIDs, 512 MSDU descriptors) it no
+  longer runs out of its arena during WMI_INIT.
+- Regulatory: the firmware reports rules with a maximum bandwidth wider
+  than the rule (5735-5835 MHz @ 160 MHz), which cfg80211 rejects;
+  clamp the bandwidth to the rule width.
+
+Also parse the host memory requests of WMI_SERVICE_READY and hand the
+allocations back in WMI_INIT, as the vendor driver does (this firmware
+makes none, but the plumbing was missing).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/wireless/ath/ath11k/core.c |  16 +--
+ drivers/net/wireless/ath/ath11k/reg.c  |   8 ++
+ drivers/net/wireless/ath/ath11k/wmi.c  | 142 +++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath11k/wmi.h  |  10 ++
+ 4 files changed, 165 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath11k/core.c b/drivers/net/wireless/ath/ath11k/core.c
+index af0c7991044..41860904b82 100644
+--- a/drivers/net/wireless/ath/ath11k/core.c
++++ b/drivers/net/wireless/ath/ath11k/core.c
+@@ -2627,22 +2627,16 @@ static int ath11k_init_hw_params(struct ath11k_base *ab)
+ 	ab->hw_params = *hw_params;
+ 
+ 	/*
+-	 * BRING-UP: early QCA6490 (v1) silicon keeps the QCA6390 UMAC ring
+-	 * layout but has the copy engines where WCN6855 has them.
++	 * BRING-UP: early QCA6490 (v1) silicon has the WCN6855 register map
++	 * (UMAC rings and copy engines; checked against the vendor fw-api
++	 * qca6490/v1 headers), with the rest of QCA6390's parameters.
+ 	 */
+ 	if (ab->qcom_platform && ab->hw_rev == ATH11K_HW_QCA6390_HW20) {
+-		static struct ath11k_hw_regs qca6490v1_regs;
+-
+-		qca6490v1_regs = qca6390_regs;
+-		qca6490v1_regs.hal_seq_wcss_umac_ce0_src_reg = wcn6855_regs.hal_seq_wcss_umac_ce0_src_reg;
+-		qca6490v1_regs.hal_seq_wcss_umac_ce0_dst_reg = wcn6855_regs.hal_seq_wcss_umac_ce0_dst_reg;
+-		qca6490v1_regs.hal_seq_wcss_umac_ce1_src_reg = wcn6855_regs.hal_seq_wcss_umac_ce1_src_reg;
+-		qca6490v1_regs.hal_seq_wcss_umac_ce1_dst_reg = wcn6855_regs.hal_seq_wcss_umac_ce1_dst_reg;
+-		ab->hw_params.regs = &qca6490v1_regs;
++		ab->hw_params.regs = &wcn6855_regs;
+ 		ab->hw_params.fix_l1ss = false;
+ 		/* the v1 firmware runs out of RAM on 17 vdevs; the vendor driver asks for 4 */
+ 		ab->hw_params.num_vdevs = 4;
+-		ath11k_info(ab, "QCA6490 v1: QCA6390 UMAC layout with WCN6855 copy engines\n");
++		ath11k_info(ab, "QCA6490 v1: QCA6390 parameters with the WCN6855 register map\n");
+ 	}
+ 
+ 	ath11k_info(ab, "%s\n", ab->hw_params.name);
+diff --git a/drivers/net/wireless/ath/ath11k/reg.c b/drivers/net/wireless/ath/ath11k/reg.c
+index 0879a132b67..9f9b769deda 100644
+--- a/drivers/net/wireless/ath/ath11k/reg.c
++++ b/drivers/net/wireless/ath/ath11k/reg.c
+@@ -735,6 +735,14 @@ ath11k_reg_build_regd(struct ath11k_base *ab,
+ 		flags |= ath11k_map_fw_reg_flags(reg_rule->flags);
+ 		flags |= ath11k_map_fw_phy_flags(reg_info->phybitmap);
+ 
++		/*
++		 * Some firmware (QCA6490 v1) reports a rule's maximum bandwidth
++		 * wider than the rule itself, e.g. 5735-5835 MHz @ 160 MHz,
++		 * which cfg80211 rejects as an invalid regulatory domain.
++		 */
++		max_bw = min_t(u16, max_bw,
++			       reg_rule->end_freq - reg_rule->start_freq);
++
+ 		ath11k_reg_update_rule(tmp_regd->reg_rules + i,
+ 				       reg_rule->start_freq,
+ 				       reg_rule->end_freq, max_bw,
+diff --git a/drivers/net/wireless/ath/ath11k/wmi.c b/drivers/net/wireless/ath/ath11k/wmi.c
+index d7239b3d934..c92163c91e9 100644
+--- a/drivers/net/wireless/ath/ath11k/wmi.c
++++ b/drivers/net/wireless/ath/ath11k/wmi.c
+@@ -91,6 +91,8 @@ struct wmi_tlv_mgmt_rx_parse {
+ };
+ 
+ static bool op9_send_hw_mode;
++static bool op9_small_cfg;
++module_param(op9_small_cfg, bool, 0444);
+ module_param(op9_send_hw_mode, bool, 0444);
+ 
+ static const struct wmi_tlv_policy wmi_tlv_policies[] = {
+@@ -576,6 +578,110 @@ static void ath11k_wmi_service_bitmap_copy(struct ath11k_pdev_wmi *wmi,
+ 	}
+ }
+ 
++#define WMI_NUM_UNITS_IS_NUM_PEERS		BIT(1)
++#define WMI_NUM_UNITS_IS_NUM_ACTIVE_PEERS	BIT(2)
++#define WMI_REQ_TO_HOST_FOR_CONT_MEMORY		BIT(3)
++#define WMI_HOST_MEM_CHUNK_MAX_SIZE		(256 * 1024)
++
++static int ath11k_wmi_tlv_mem_req_parse(struct ath11k_base *ab, u16 tag, u16 len,
++					const void *ptr, void *data)
++{
++	struct ath11k_wmi_base *wmi_ab = &ab->wmi_ab;
++	const __le32 *req = ptr;
++
++	if (tag != WMI_TAG_WLAN_HOST_MEM_REQ || len < 4 * sizeof(u32))
++		return 0;
++
++	if (wmi_ab->num_mem_reqs >= WMI_MAX_MEM_REQS) {
++		ath11k_warn(ab, "too many host memory requests\n");
++		return 0;
++	}
++
++	wmi_ab->mem_reqs[wmi_ab->num_mem_reqs++] = (struct wmi_host_mem_req) {
++		.req_id = le32_to_cpu(req[0]),
++		.unit_size = le32_to_cpu(req[1]),
++		.num_unit_info = le32_to_cpu(req[2]),
++		.num_units = le32_to_cpu(req[3]),
++	};
++
++	ath11k_dbg(ab, ATH11K_DBG_WMI,
++		   "host mem req id %u unit size %u num_unit_info 0x%x num units %u\n",
++		   le32_to_cpu(req[0]), le32_to_cpu(req[1]),
++		   le32_to_cpu(req[2]), le32_to_cpu(req[3]));
++
++	return 0;
++}
++
++static void ath11k_wmi_free_host_mem(struct ath11k_base *ab)
++{
++	struct ath11k_wmi_base *wmi_ab = &ab->wmi_ab;
++	u32 i;
++
++	for (i = 0; i < wmi_ab->num_mem_chunks; i++)
++		dma_free_coherent(ab->dev, wmi_ab->mem_chunks[i].len,
++				  wmi_ab->mem_chunks[i].vaddr,
++				  wmi_ab->mem_chunks[i].paddr);
++	wmi_ab->num_mem_chunks = 0;
++}
++
++/*
++ * Firmware that wants host memory lists it in WMI_SERVICE_READY; the
++ * allocations go back in WMI_INIT. As the vendor driver does: units tied
++ * to peers are num_peers + 1, and chunks are at most 256 KiB unless the
++ * firmware needs them contiguous.
++ */
++static int ath11k_wmi_alloc_host_mem(struct ath11k_base *ab,
++				     const struct target_resource_config *config)
++{
++	struct ath11k_wmi_base *wmi_ab = &ab->wmi_ab;
++	u32 i;
++
++	ath11k_wmi_free_host_mem(ab);
++
++	for (i = 0; i < wmi_ab->num_mem_reqs; i++) {
++		const struct wmi_host_mem_req *req = &wmi_ab->mem_reqs[i];
++		u32 unit_len = round_up(req->unit_size, 4);
++		u32 units = req->num_units;
++		u32 max_units;
++
++		if (req->num_unit_info & (WMI_NUM_UNITS_IS_NUM_PEERS |
++					  WMI_NUM_UNITS_IS_NUM_ACTIVE_PEERS))
++			units = config->num_peers + 1;
++
++		if (!units || !unit_len)
++			continue;
++
++		max_units = units;
++		if (!(req->num_unit_info & WMI_REQ_TO_HOST_FOR_CONT_MEMORY))
++			max_units = max_t(u32, 1, WMI_HOST_MEM_CHUNK_MAX_SIZE / unit_len);
++
++		while (units) {
++			struct wmi_host_mem_chunk *chunk;
++			u32 n = min(units, max_units);
++
++			if (wmi_ab->num_mem_chunks == WMI_MAX_MEM_REQS) {
++				ath11k_warn(ab, "out of host memory chunks\n");
++				return -ENOMEM;
++			}
++
++			chunk = &wmi_ab->mem_chunks[wmi_ab->num_mem_chunks];
++			chunk->vaddr = dma_alloc_coherent(ab->dev, n * unit_len,
++							  &chunk->paddr, GFP_KERNEL);
++			if (!chunk->vaddr) {
++				ath11k_warn(ab, "failed to allocate %u bytes of host memory for req %u\n",
++					    n * unit_len, req->req_id);
++				return -ENOMEM;
++			}
++			chunk->len = n * unit_len;
++			chunk->req_id = req->req_id;
++			wmi_ab->num_mem_chunks++;
++			units -= n;
++		}
++	}
++
++	return 0;
++}
++
+ static int ath11k_wmi_tlv_svc_rdy_parse(struct ath11k_base *ab, u16 tag, u16 len,
+ 					const void *ptr, void *data)
+ {
+@@ -603,6 +709,9 @@ static int ath11k_wmi_tlv_svc_rdy_parse(struct ath11k_base *ab, u16 tag, u16 len
+ 			svc_ready->wmi_svc_bitmap_done = true;
+ 		}
+ 		break;
++	case WMI_TAG_ARRAY_STRUCT:
++		return ath11k_wmi_tlv_iter(ab, ptr, len,
++					   ath11k_wmi_tlv_mem_req_parse, NULL);
+ 	default:
+ 		break;
+ 	}
+@@ -615,6 +724,8 @@ static int ath11k_service_ready_event(struct ath11k_base *ab, struct sk_buff *sk
+ 	struct wmi_tlv_svc_ready_parse svc_ready = { };
+ 	int ret;
+ 
++	ab->wmi_ab.num_mem_reqs = 0;
++
+ 	ret = ath11k_wmi_tlv_iter(ab, skb->data, skb->len,
+ 				  ath11k_wmi_tlv_svc_rdy_parse,
+ 				  &svc_ready);
+@@ -4474,6 +4585,7 @@ int ath11k_wmi_cmd_init(struct ath11k_base *ab)
+ 	struct ath11k_wmi_base *wmi_ab = &ab->wmi_ab;
+ 	struct wmi_init_cmd_param init_param;
+ 	struct target_resource_config  config;
++	int ret;
+ 
+ 	memset(&init_param, 0, sizeof(init_param));
+ 	memset(&config, 0, sizeof(config));
+@@ -4484,8 +4596,37 @@ int ath11k_wmi_cmd_init(struct ath11k_base *ab)
+ 		     ab->wmi_ab.svc_map))
+ 		config.is_reg_cc_ext_event_supported = 1;
+ 
++	/*
++	 * BRING-UP: mobile firmware reserves IPA offload resources unless told
++	 * not to; the vendor driver sets this whenever IPA is not in use.
++	 */
++	if (ab->qcom_platform) {
++		config.flag1 |= WMI_RSRC_CFG_FLAG1_IPA_DISABLE;
++		/* the rest as the vendor driver sends them; the firmware RAM is tight */
++		config.num_wow_filters = 0;
++		config.num_keep_alive_pattern = 6;
++		config.gtk_offload_max_vdev = 3;
++		config.beacon_tx_offload_max_vdev = 3;
++		config.num_msdu_desc = 1024 + 32;
++		if (op9_small_cfg) {
++			config.num_vdevs = 3;
++			config.num_peers = 8;
++			config.num_tids = 20;
++			config.num_msdu_desc = 512;
++			config.num_offload_peers = 2;
++			config.num_offload_reorder_buffs = 2;
++			config.num_tdls_conn_table_entries = 2;
++			config.num_multicast_filter_entries = 8;
++			config.num_keep_alive_pattern = 0;
++		}
++	}
++
+ 	memcpy(&wmi_ab->wlan_resource_config, &config, sizeof(config));
+ 
++	ret = ath11k_wmi_alloc_host_mem(ab, &config);
++	if (ret)
++		return ret;
++
+ 	init_param.res_cfg = &wmi_ab->wlan_resource_config;
+ 	init_param.num_mem_chunks = wmi_ab->num_mem_chunks;
+ 	init_param.hw_mode_id = wmi_ab->preferred_hw_mode;
+@@ -9327,6 +9468,7 @@ void ath11k_wmi_detach(struct ath11k_base *ab)
+ 		ath11k_wmi_pdev_detach(ab, i);
+ 
+ 	ath11k_wmi_free_dbring_caps(ab);
++	ath11k_wmi_free_host_mem(ab);
+ }
+ 
+ int ath11k_wmi_hw_data_filter_cmd(struct ath11k *ar, u32 vdev_id,
+diff --git a/drivers/net/wireless/ath/ath11k/wmi.h b/drivers/net/wireless/ath/ath11k/wmi.h
+index b2dade0516a..d125725375e 100644
+--- a/drivers/net/wireless/ath/ath11k/wmi.h
++++ b/drivers/net/wireless/ath/ath11k/wmi.h
+@@ -2353,6 +2353,7 @@ struct wmi_init_cmd {
+ } __packed;
+ 
+ #define WMI_RSRC_CFG_FLAG1_BSS_CHANNEL_INFO_64 BIT(5)
++#define WMI_RSRC_CFG_FLAG1_IPA_DISABLE BIT(30)
+ #define WMI_RSRC_CFG_FLAG2_CALC_NEXT_DTIM_COUNT_SET BIT(9)
+ #define WMI_RSRC_CFG_FLAG1_ACK_RSSI BIT(18)
+ 
+@@ -5863,6 +5864,15 @@ struct ath11k_wmi_base {
+ 	u32 rx_decap_mode;
+ 	struct wmi_host_mem_chunk mem_chunks[WMI_MAX_MEM_REQS];
+ 
++	/* host memory the firmware asks for in WMI_SERVICE_READY */
++	u32 num_mem_reqs;
++	struct wmi_host_mem_req {
++		u32 req_id;
++		u32 unit_size;
++		u32 num_unit_info;
++		u32 num_units;
++	} mem_reqs[WMI_MAX_MEM_REQS];
++
+ 	enum wmi_host_hw_mode_config_type preferred_hw_mode;
+ 	struct target_resource_config  wlan_resource_config;
+ 

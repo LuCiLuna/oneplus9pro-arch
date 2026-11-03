@@ -1,0 +1,36 @@
+# hexagonrpc with the two patches from this folder. The sensors need them to
+# save their registry. Arch Linux ARM has no hexagonrpc package.
+
+pkgname=hexagonrpc-op9
+_pkgname=hexagonrpc
+pkgver=0.5.0
+_commit=da7a3742ab8d5273a281b70ee11f16fb2cb6a690
+pkgrel=1
+pkgdesc='FastRPC server for Qualcomm DSPs (OnePlus 9 Pro patches)'
+arch=(aarch64)
+url='https://github.com/linux-msm/hexagonrpc'
+license=('GPL-3.0-or-later')
+depends=(glibc)
+makedepends=(git meson)
+provides=("hexagonrpc=$pkgver")
+conflicts=(hexagonrpc)
+source=("git+$url.git#commit=$_commit"
+        0001-rpcd-apps_std-support-writing-files-in-mapped-direct.patch
+        0002-rpcd-listener-fetch-input-buffers-larger-than-256-by.patch
+        hexagonrpc.sysusers)
+b2sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  cd $_pkgname
+  for p in ../0*.patch; do patch -Np1 < "$p"; done
+}
+
+build() {
+  arch-meson $_pkgname build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 hexagonrpc.sysusers "$pkgdir/usr/lib/sysusers.d/hexagonrpc.conf"
+}
