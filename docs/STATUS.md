@@ -47,6 +47,11 @@ series and haven't been rerun since.
 - **Driver unloading:** don't unload `qcom_iris` after a decoder hang, or `ath11k_pci` after a failed
   crash recovery. Either can hang shutdown, so reboot instead.
 - **Clock:** the PMIC real-time clock is read-only, so `rtc-offset` stores an offset in a file.
+- **GPS:** geoclue reports an accuracy of 0 m for modem fixes, because it doesn't compute accuracy
+  from this modem's NMEA, so apps treat every fix as exact. Fixes measured outdoors stayed within
+  about 11 m of their average. There's no assisted GPS yet, so a cold start takes about a minute.
+- **Modem without a SIM:** the modem keeps running and searching for emergency service. Its
+  effect on standby battery hasn't been measured.
 - **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
   bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
 
