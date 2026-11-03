@@ -38,13 +38,17 @@ series and haven't been rerun since.
   run because Waydroid doesn't pass Google's device integrity checks. Waydroid also makes the camera
   and video decoder devices readable and writable by every user. Android 17 wasn't tried: no ARM64
   image exists, and others report its window never appears on Waydroid 1.6.3.
-- **Docks:** one USB-C dock tested failed both DisplayPort and USB 3. A plain USB-C to HDMI adapter
-  and a USB 3 OTG adapter both work.
+- **Docks:** two USB-C DisplayPort docks (one a Dell) gave working USB 3, Ethernet, keyboard and
+  mouse, but no display: the DisplayPort output never reported a connection. A plain USB-C to HDMI
+  adapter works. `pmic_glink_altmode` can now log what the firmware reports; turn it on with
+  `options pmic_glink_altmode dyndbg=+p` in `/etc/modprobe.d/`.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
 - **Boot:** `systemd-backlight` sometimes fails at startup.
 - **Driver unloading:** don't unload `qcom_iris` after a decoder hang, or `ath11k_pci` after a failed
   crash recovery. Either can hang shutdown, so reboot instead.
 - **Clock:** the PMIC real-time clock is read-only, so `rtc-offset` stores an offset in a file.
+- **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
+  bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
 
 ## Fingerprint reader
 
@@ -60,6 +64,7 @@ been attempted on Linux.
 
 1. Improve camera quality and check video recording
 2. Reach deeper sleep, including cutting touch power
-3. Add the earpiece, USB-C headset and speaker protection
-4. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
-5. Bring up the modem
+3. Get a display from USB-C docks
+4. Test an analog USB-C headset
+5. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+6. Bring up the modem

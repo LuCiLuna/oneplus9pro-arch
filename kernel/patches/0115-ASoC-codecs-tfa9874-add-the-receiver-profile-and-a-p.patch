@@ -1,0 +1,260 @@
+From 88f4c5b67e729c25999d6e6f0d39e9cbdccc0b37 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 00:17:54 -0600
+Subject: [PATCH 115/116] ASoC: codecs: tfa9874: add the receiver profile and a
+ playback switch
+
+On the OnePlus 9 Pro the top TFA9874 also drives the earpiece. Stock
+Android switches it to the container's "receiver" profile for calls,
+which turns the boost converter off, drops the input level by 6 dB,
+raises the speaker gain code to 13 and enables low-noise mode, and
+switches the bottom amplifier off.
+
+Add a "Profile" control (Speaker, Receiver) that applies those fields,
+live if the amplifier is running, and a "Playback Switch" that keeps
+an amplifier powered down while the stream runs. With the DT name
+prefixes these are "Top Profile", "Bottom Playback Switch" and so on.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sound/soc/codecs/tfa9874.c | 149 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 135 insertions(+), 14 deletions(-)
+
+diff --git a/sound/soc/codecs/tfa9874.c b/sound/soc/codecs/tfa9874.c
+index baa6b060abe..c8a85b90d4a 100644
+--- a/sound/soc/codecs/tfa9874.c
++++ b/sound/soc/codecs/tfa9874.c
+@@ -5,7 +5,9 @@
+  * The TFA9874 has no on-chip DSP: speaker protection runs on the host DSP and
+  * the amplifier itself only needs its registers programmed. The settings below
+  * come from the NXP tfa98xx driver (tfa9874_specific) and the OnePlus 9 Pro
+- * container file (tfa98xx.cnt, "speaker" profile).
++ * container file (tfa98xx.cnt). The container has a "speaker" profile for
++ * both amplifiers and a "receiver" profile for the top one, which is also the
++ * earpiece; the "Profile" control picks between them.
+  *
+  * Register definitions/sequences taken from the NXP tfa98xx kernel driver:
+  * Copyright (C) 2014-2020 NXP Semiconductors, All Rights Reserved.
+@@ -16,6 +18,7 @@
+ #include <linux/i2c.h>
+ #include <linux/log2.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
+ #include <sound/pcm_params.h>
+@@ -115,15 +118,25 @@ static const struct tfa9874_bf_val tfa9874_cnt_init[] = {
+ 	{ TFA_BF(0x75, 8, 5), 16 },	/* DCTRIPT */
+ 	{ TFA_BF(0x76, 3, 6), 30 },	/* DCVOF */
+ 	{ TFA_BF(0x76, 9, 6), 63 },	/* DCVOS */
+-	/* "speaker" profile */
+-	{ TFA_BF(0x64, 14, 2), 2 },	/* LPM1MODE */
+-	{ TFA_BF(0x23, 1, 1), 1 },	/* TDMDCE */
+-	{ TFA_BF(0x00, 4, 1), 1 },	/* DCA: boost converter on */
+-	{ TFA_BF(0x61, 6, 4), 4 },	/* TDMSPKG */
+-	{ TFA_BF(0x02, 4, 1), 0 },	/* INPLEV */
+-	{ TFA_BF(0x62, 14, 2), 0 },	/* LNMODE */
+ };
+ 
++enum { TFA9874_PROFILE_SPEAKER, TFA9874_PROFILE_RECEIVER };
++
++/* The container's "speaker" and "receiver" profiles, indexed by the enum above */
++static const struct {
++	u16 bf;
++	u16 val[2];
++} tfa9874_profile_bfs[] = {
++	{ TFA_BF(0x64, 14, 2), { 2, 0 } },	/* LPM1MODE */
++	{ TFA_BF(0x23, 1, 1), { 1, 0 } },	/* TDMDCE */
++	{ TFA_BF(0x00, 4, 1), { 1, 0 } },	/* DCA: boost converter */
++	{ TFA_BF(0x61, 6, 4), { 4, 13 } },	/* TDMSPKG: speaker gain */
++	{ TFA_BF(0x02, 4, 1), { 0, 1 } },	/* INPLEV: -6 dB input */
++	{ TFA_BF(0x62, 14, 2), { 0, 3 } },	/* LNMODE: low noise */
++};
++
++static const char * const tfa9874_profile_names[] = { "Speaker", "Receiver" };
++
+ #define TFA9874_TDMSPKS		TFA_BF(0x26, 0, 4)
+ #define TFA9874_TDMDCS		TFA_BF(0x26, 4, 4)
+ #define TFA9874_TDMCSS		TFA_BF(0x26, 12, 4)
+@@ -139,6 +152,12 @@ struct tfa9874 {
+ 	unsigned int channel;
+ 	unsigned int rate;
+ 	unsigned int slot_width;
++
++	struct mutex lock;	/* the state below */
++	unsigned int profile;
++	bool enabled;		/* "Playback Switch" */
++	bool active;		/* DAPM wants the amplifier on */
++	bool running;
+ };
+ 
+ static int tfa9874_bf_write(struct tfa9874 *tfa, u16 bf, u16 val)
+@@ -174,6 +193,15 @@ static int tfa9874_rate_to_audfs(unsigned int rate)
+ 	return -EINVAL;
+ }
+ 
++static void tfa9874_apply_profile(struct tfa9874 *tfa)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(tfa9874_profile_bfs); i++)
++		tfa9874_bf_write(tfa, tfa9874_profile_bfs[i].bf,
++				 tfa9874_profile_bfs[i].val[tfa->profile]);
++}
++
+ static int tfa9874_init(struct tfa9874 *tfa)
+ {
+ 	const struct tfa9874_reg_val *init;
+@@ -210,6 +238,7 @@ static int tfa9874_init(struct tfa9874 *tfa)
+ 
+ 	for (i = 0; i < ARRAY_SIZE(tfa9874_cnt_init); i++)
+ 		tfa9874_bf_write(tfa, tfa9874_cnt_init[i].bf, tfa9874_cnt_init[i].val);
++	tfa9874_apply_profile(tfa);
+ 
+ 	/* Speaker in, current sense out; the other amp uses the other slot */
+ 	tfa9874_bf_write(tfa, TFA9874_TDMSPKS, tfa->channel);
+@@ -265,6 +294,7 @@ static int tfa9874_power_up(struct tfa9874 *tfa)
+ 	if (ret)
+ 		dev_warn(tfa->dev, "not operating (manstate %u)\n", state);
+ 
++	tfa->running = true;
+ 	return 0;
+ }
+ 
+@@ -272,6 +302,19 @@ static void tfa9874_power_down(struct tfa9874 *tfa)
+ {
+ 	tfa9874_bf_write(tfa, TFA9874_AMPE, 0);
+ 	tfa9874_bf_write(tfa, TFA9874_PWDN, 1);
++	tfa->running = false;
++}
++
++/* Called with tfa->lock held, after active or enabled changed */
++static int tfa9874_update(struct tfa9874 *tfa)
++{
++	bool want = tfa->active && tfa->enabled;
++
++	if (want && !tfa->running)
++		return tfa9874_power_up(tfa);
++	if (!want && tfa->running)
++		tfa9874_power_down(tfa);
++	return 0;
+ }
+ 
+ static int tfa9874_amp_event(struct snd_soc_dapm_widget *w,
+@@ -279,18 +322,90 @@ static int tfa9874_amp_event(struct snd_soc_dapm_widget *w,
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+ 	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++	int ret;
+ 
+-	switch (event) {
+-	case SND_SOC_DAPM_POST_PMU:
+-		return tfa9874_power_up(tfa);
+-	case SND_SOC_DAPM_PRE_PMD:
+-		tfa9874_power_down(tfa);
+-		break;
++	mutex_lock(&tfa->lock);
++	tfa->active = event == SND_SOC_DAPM_POST_PMU;
++	ret = tfa9874_update(tfa);
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static int tfa9874_switch_get(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++
++	ucontrol->value.integer.value[0] = tfa->enabled;
++	return 0;
++}
++
++static int tfa9874_switch_put(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++	bool enabled = ucontrol->value.integer.value[0];
++	int ret;
++
++	mutex_lock(&tfa->lock);
++	if (enabled == tfa->enabled) {
++		mutex_unlock(&tfa->lock);
++		return 0;
+ 	}
++	tfa->enabled = enabled;
++	ret = tfa9874_update(tfa);
++	mutex_unlock(&tfa->lock);
++
++	return ret ? ret : 1;
++}
+ 
++static int tfa9874_profile_get(struct snd_kcontrol *kcontrol,
++			       struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++
++	ucontrol->value.enumerated.item[0] = tfa->profile;
+ 	return 0;
+ }
+ 
++static int tfa9874_profile_put(struct snd_kcontrol *kcontrol,
++			       struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa9874 *tfa = snd_soc_component_get_drvdata(component);
++	unsigned int profile = ucontrol->value.enumerated.item[0];
++
++	if (profile >= ARRAY_SIZE(tfa9874_profile_names))
++		return -EINVAL;
++
++	mutex_lock(&tfa->lock);
++	if (profile == tfa->profile) {
++		mutex_unlock(&tfa->lock);
++		return 0;
++	}
++	tfa->profile = profile;
++	if (tfa->running) {
++		/* As the vendor driver does: amplifier off while switching */
++		tfa9874_bf_write(tfa, TFA9874_AMPE, 0);
++		tfa9874_apply_profile(tfa);
++		tfa9874_bf_write(tfa, TFA9874_AMPE, 1);
++	}
++	mutex_unlock(&tfa->lock);
++
++	return 1;
++}
++
++static SOC_ENUM_SINGLE_EXT_DECL(tfa9874_profile_enum, tfa9874_profile_names);
++
++static const struct snd_kcontrol_new tfa9874_controls[] = {
++	SOC_SINGLE_BOOL_EXT("Playback Switch", 0, tfa9874_switch_get, tfa9874_switch_put),
++	SOC_ENUM_EXT("Profile", tfa9874_profile_enum, tfa9874_profile_get, tfa9874_profile_put),
++};
++
+ static const struct snd_soc_dapm_widget tfa9874_dapm_widgets[] = {
+ 	SND_SOC_DAPM_OUTPUT("OUT"),
+ 	SND_SOC_DAPM_OUT_DRV_E("AMP", SND_SOC_NOPM, 0, 0, NULL, 0, tfa9874_amp_event,
+@@ -304,6 +419,8 @@ static const struct snd_soc_dapm_route tfa9874_dapm_routes[] = {
+ };
+ 
+ static const struct snd_soc_component_driver tfa9874_component = {
++	.controls		= tfa9874_controls,
++	.num_controls		= ARRAY_SIZE(tfa9874_controls),
+ 	.dapm_widgets		= tfa9874_dapm_widgets,
+ 	.num_dapm_widgets	= ARRAY_SIZE(tfa9874_dapm_widgets),
+ 	.dapm_routes		= tfa9874_dapm_routes,
+@@ -365,6 +482,10 @@ static int tfa9874_i2c_probe(struct i2c_client *i2c)
+ 	tfa->dev = dev;
+ 	tfa->rate = 48000;
+ 	tfa->slot_width = 16;
++	tfa->enabled = true;
++	ret = devm_mutex_init(dev, &tfa->lock);
++	if (ret)
++		return ret;
+ 	i2c_set_clientdata(i2c, tfa);
+ 	device_property_read_u32(dev, "nxp,tdm-slot", &tfa->channel);
+ 

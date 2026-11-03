@@ -1,0 +1,32 @@
+From a5767b76564b5d434c7be7a23b9f9252fb045088 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 00:17:54 -0600
+Subject: [PATCH 116/116] soc: qcom: pmic_glink_altmode: log each USB-C
+ notification
+
+When a dock's DisplayPort output doesn't light up there is no way to
+tell what the firmware reported. Add a dev_dbg with the SVID, mux state,
+orientation, DP pin assignment and HPD bits of every notification.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/qcom/pmic_glink_altmode.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+index 465e5d2316a..4d452934e21 100644
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -502,6 +502,12 @@ static void pmic_glink_altmode_sc8280xp_notify(struct pmic_glink_altmode *altmod
+ 		alt_port->tbt_data = *tbt;
+ 	}
+ 
++	dev_dbg(altmode->dev, "port %u: svid %#06x mux %u orientation %u pin %u hpd %u irq %u\n",
++		port, svid, notify->mux_ctrl, orientation,
++		svid == USB_TYPEC_DP_SID ? notify->extended_data.dp.pin_assignment : 0,
++		svid == USB_TYPEC_DP_SID ? notify->extended_data.dp.hpd_state : 0,
++		svid == USB_TYPEC_DP_SID ? notify->extended_data.dp.hpd_irq : 0);
++
+ 	queue_work(system_freezable_wq, &alt_port->work);
+ }
+ 

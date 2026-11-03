@@ -26,11 +26,12 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | GPU | ✅ | OpenGL 4.6, ES 3.2, Vulkan 1.3 |
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
-| HDMI over USB-C | ✅ | With a USB-C to HDMI adapter; some docks don't work |
+| HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
 | Charging | ✅ | USB-C PD, about 25 W; stops near 95% by choice. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
 | Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Works the same as USB otherwise; USB takes over if both are attached |
 | Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed |
-| Speakers and mics | ✅ | No speaker protection yet, so avoid long periods at full volume |
+| Speakers and mics | ✅ | A limiter and high-pass filter guard the speakers; it's not stock's full speaker protection |
+| Earpiece | ✅ | The top speaker in stock's receiver mode, chosen as a separate audio profile; loudness not yet checked by ear |
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
@@ -45,7 +46,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Android apps | ✅ | Waydroid with Android 13 (LineageOS 20): GPU acceleration, internet, sound and Google Play. A **Stop Android** launcher shuts it down |
 | App launching | ✅ | No loading splash, since apps here usually open before it would go away |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
-| Earpiece, USB-C headset | ❌ | Not finished |
+| USB-C analog headset | 🟡 | Routing is set up; untested without an analog adapter |
 | Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
 | GPS | ❌ | Not working; probably depends on the modem |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
