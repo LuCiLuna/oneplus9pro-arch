@@ -1,0 +1,5 @@
+# Takes over callaudiod's bus name: this copy in /usr/local wins over /usr/share.
+[D-BUS Service]
+Name=org.mobian_project.CallAudio
+Exec=/usr/local/bin/op9-callaudio
+SystemdService=op9-callaudio.service

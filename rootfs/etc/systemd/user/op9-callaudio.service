@@ -1,0 +1,11 @@
+[Unit]
+Description=Call audio for the OnePlus 9 Pro (replaces callaudiod)
+
+[Service]
+Type=dbus
+BusName=org.mobian_project.CallAudio
+ExecStart=/usr/local/bin/op9-callaudio
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,25 @@
+From defc10bdec81a12d76dbaf25052655ab484349d8 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 01:10:59 -0600
+Subject: [PATCH 139/140] HACK: arm64: rebuild the OnePlus 9 Pro built-in DTB
+ object when the DTB changes
+
+op9-builtin-dtb.S pulls the DTB in with .incbin, which fixdep doesn't
+see, so after a device tree change the kernel kept the old DTB unless
+the object was deleted by hand. Make the object depend on the file.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/kernel/Makefile | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
+index ce853ef7737..5f49038f5e2 100644
+--- a/arch/arm64/kernel/Makefile
++++ b/arch/arm64/kernel/Makefile
+@@ -91,3 +91,5 @@ endif
+ # for cleaning
+ subdir- += vdso vdso32
+ obj-$(CONFIG_ARM64_OP9_BUILTIN_DTB)	+= op9-builtin-dtb.o
++# .incbin isn't seen by fixdep, so rebuild when the DTB file changes
++$(obj)/op9-builtin-dtb.o: $(CONFIG_ARM64_OP9_BUILTIN_DTB_PATH:"%"=%)

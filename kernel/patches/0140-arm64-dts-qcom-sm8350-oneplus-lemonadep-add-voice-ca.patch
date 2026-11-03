@@ -1,0 +1,109 @@
+From 06a019c0d53d6428d67044e684c33b313eb504be Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 01:10:59 -0600
+Subject: [PATCH 140/140] arm64: dts: qcom: sm8350-oneplus-lemonadep: add voice
+ call audio
+
+Add the ADSP voice services (MVM, CVS, CVP) to sm8350.dtsi, disabled,
+and enable them on the OnePlus 9 Pro with a VoiceMMode1 front end, as
+stock's "voicemmode1-call" path: the modem's voice stream is routed in
+the DSP to TERT_MI2S_RX (the speaker amplifiers) and from
+TX_CODEC_DMA_TX_3 (the microphones).
+
+Tested on AT&T VoLTE: audio both ways through the earpiece.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 28 +++++++++++++++++++
+ arch/arm64/boot/dts/qcom/sm8350.dtsi          | 28 +++++++++++++++++++
+ 2 files changed, 56 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 58034faeafa..26a2c1ed852 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -9,6 +9,7 @@
+ 
+ #include <dt-bindings/leds/common.h>
+ #include <dt-bindings/media/video-interfaces.h>
++#include <dt-bindings/sound/qcom,q6voice.h>
+ #include "sm8350-oneplus-common.dtsi"
+ 
+ / {
+@@ -220,6 +221,15 @@ cpu {
+ 			};
+ 		};
+ 
++		/* Modem voice calls, routed inside the DSP like stock "voicemmode1-call" */
++		voicemmode1-dai-link {
++			link-name = "VoiceMMode1";
++
++			cpu {
++				sound-dai = <&q6voicedai VOICEMMODE1>;
++			};
++		};
++
+ 		speaker-dai-link {
+ 			link-name = "Speaker Playback";
+ 
+@@ -1174,3 +1184,21 @@ &vreg_l1i {
+ &pm8008j {
+ 	status = "disabled";
+ };
++
++&q6cvp {
++	status = "okay";
++};
++
++&q6cvs {
++	status = "okay";
++};
++
++&q6mvm {
++	status = "okay";
++};
++
++&q6voicedai {
++	dai@1 {
++		reg = <VOICEMMODE1>;
++	};
++};
+diff --git a/arch/arm64/boot/dts/qcom/sm8350.dtsi b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+index 16ed4f7ea50..fade324ae67 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8350.dtsi
+@@ -2322,6 +2322,34 @@ q6routing: routing {
+ 							#sound-dai-cells = <0>;
+ 						};
+ 					};
++
++					q6mvm: service@9 {
++						compatible = "qcom,q6mvm";
++						reg = <APR_SVC_ADSP_MVM>;
++						qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++						status = "disabled";
++
++						q6voicedai: dais {
++							compatible = "qcom,q6voice-dais";
++							#address-cells = <1>;
++							#size-cells = <0>;
++							#sound-dai-cells = <1>;
++						};
++					};
++
++					q6cvs: service@a {
++						compatible = "qcom,q6cvs";
++						reg = <APR_SVC_ADSP_CVS>;
++						qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++						status = "disabled";
++					};
++
++					q6cvp: service@b {
++						compatible = "qcom,q6cvp";
++						reg = <APR_SVC_ADSP_CVP>;
++						qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++						status = "disabled";
++					};
+ 				};
+ 
+ 				fastrpc {

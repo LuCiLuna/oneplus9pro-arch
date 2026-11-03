@@ -334,6 +334,16 @@ it first asks the phone side to bring up the `ims` data connection, which Androi
 drop-in starts it before ModemManager so the request at power-on isn't missed. The modem picks
 its carrier configuration, such as "VoLTE-ATT", from the SIM by itself.
 
+Call audio runs inside the audio DSP, not through PipeWire. `op9-callaudio` (in `rootfs/`) opens
+the DSP voice path while a call is active and takes over callaudiod's D-Bus name, so the call
+screen's speaker and mute buttons work. Install the dialer and messaging apps and turn it on as
+`alarm`:
+
+```sh
+sudo pacman -S gnome-calls chatty
+systemctl --user enable --now op9-callaudio
+```
+
 Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
 
 ```sh

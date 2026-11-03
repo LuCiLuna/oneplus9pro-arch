@@ -1,0 +1,245 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Call audio for the OnePlus 9 Pro.
+
+During a call the audio never passes through PipeWire: the modem's voice stream
+is routed inside the audio DSP (q6voice, "VoiceMMode1") straight to the
+speaker amplifiers and the microphones. This service does two jobs:
+
+* Like q6voiced, it opens and prepares the hostless VoiceMMode1 PCM while a
+  ModemManager call is dialing, ringing out or active, which starts the DSP
+  voice session, and sets the DSP voice routes.
+* It replaces callaudiod on the session bus (org.mobian_project.CallAudio), so
+  Phosh and GNOME Calls can switch between earpiece and speaker and mute the
+  microphone. callaudiod can't do that here: PipeWire puts the earpiece and
+  the speaker in separate profiles because they share a PCM.
+
+Earpiece = top amplifier alone in the stock "receiver" profile.
+Speaker  = both amplifiers in the "speaker" profile.
+"""
+import ctypes
+import subprocess
+import sys
+
+import gi
+gi.require_version('Gio', '2.0')
+from gi.repository import Gio, GLib
+
+CARD = '0'
+VOICE_PCM = b'hw:0,3'
+MM_ACTIVE = {1, 2, 4}  # dialing, ringing-out, active (see q6voiced)
+MIC_GAIN, MIC_MUTED = 84, 0
+
+IFACE_XML = '''
+<node>
+  <interface name="org.mobian_project.CallAudio">
+    <method name="SelectMode"><arg direction="in" name="mode" type="u"/><arg direction="out" name="success" type="b"/></method>
+    <property name="AudioMode" type="u" access="read"/>
+    <method name="EnableSpeaker"><arg direction="in" name="enable" type="b"/><arg direction="out" name="success" type="b"/></method>
+    <property name="SpeakerState" type="u" access="read"/>
+    <method name="MuteMic"><arg direction="in" name="mute" type="b"/><arg direction="out" name="success" type="b"/></method>
+    <property name="MicState" type="u" access="read"/>
+  </interface>
+</node>'''
+BUS_NAME = 'org.mobian_project.CallAudio'
+OBJ_PATH = '/org/mobian_project/CallAudio'
+
+asound = ctypes.CDLL('libasound.so.2')
+asound.snd_strerror.restype = ctypes.c_char_p
+
+
+def log(*a):
+    print(*a, flush=True)
+
+
+def cset(name, value):
+    r = subprocess.run(['amixer', '-c', CARD, '-q', 'cset', f'name={name}', str(value)],
+                       capture_output=True, text=True)
+    if r.returncode:
+        log(f'cset {name}={value} failed: {r.stderr.strip()}')
+        return False
+    return True
+
+
+class CallAudio:
+    def __init__(self):
+        self.mode = 0          # 0 default, 1 voice call
+        self.speaker = False
+        self.mic_muted = False
+        self.calls = {}        # ModemManager call path -> state
+        self.pcms = []
+        self.conn = None       # session bus
+
+    # --- audio paths -------------------------------------------------------
+
+    def apply_output(self):
+        if not self.pcms:
+            return
+        if self.speaker:
+            cset('Top Profile', 'Speaker')
+            cset('Top Playback Switch', 1)
+            cset('Bottom Playback Switch', 1)
+        else:
+            cset('Bottom Playback Switch', 0)
+            cset('Top Profile', 'Receiver')
+            cset('Top Playback Switch', 1)
+
+    def apply_mic(self):
+        gain = MIC_MUTED if self.mic_muted else MIC_GAIN
+        cset('TX_DEC0 Volume', gain)
+        cset('TX_DEC1 Volume', gain)
+
+    def open_pcm(self, stream):
+        h = ctypes.c_void_p()
+        r = asound.snd_pcm_open(ctypes.byref(h), VOICE_PCM, stream, 0)
+        if r < 0:
+            raise OSError(asound.snd_strerror(r).decode())
+        # 8 kHz mono S16, 2 x 20 ms: no audio data is ever written or read
+        r = asound.snd_pcm_set_params(h, 2, 3, 1, 8000, 0, 40000)
+        if r < 0 or asound.snd_pcm_prepare(h) < 0:
+            asound.snd_pcm_close(h)
+            raise OSError(f'setup failed ({r})')
+        return h
+
+    def voice_on(self):
+        if self.pcms:
+            return
+        # Built-in microphones (DMIC1, DMIC3), as the UCM "Mic" device
+        for c, v in (('TX DEC0 MUX', 'MSM_DMIC'), ('TX DMIC MUX0', 'DMIC1'), ('TX_AIF1_CAP Mixer DEC0', 1),
+                     ('TX DEC1 MUX', 'MSM_DMIC'), ('TX DMIC MUX1', 'DMIC3'), ('TX_AIF1_CAP Mixer DEC1', 1)):
+            cset(c, v)
+        self.apply_mic()
+        cset('TERT_MI2S_RX Voice Mixer VoiceMMode1', 1)
+        cset('VoiceMMode1 Capture Mixer TX_CODEC_DMA_TX_3', 1)
+        try:
+            self.pcms = [self.open_pcm(1), self.open_pcm(0)]  # capture, playback
+        except OSError as e:
+            log(f'opening the voice PCM failed: {e}')
+            for h in self.pcms:
+                asound.snd_pcm_close(h)
+            self.pcms = []
+            return
+        self.apply_output()
+        log('voice path open', 'speaker' if self.speaker else 'earpiece')
+
+    def voice_off(self):
+        if not self.pcms:
+            return
+        for h in reversed(self.pcms):
+            asound.snd_pcm_close(h)
+        self.pcms = []
+        cset('TERT_MI2S_RX Voice Mixer VoiceMMode1', 0)
+        cset('VoiceMMode1 Capture Mixer TX_CODEC_DMA_TX_3', 0)
+        # Back to the normal speaker setup and unmuted microphones
+        cset('Top Profile', 'Speaker')
+        cset('Top Playback Switch', 1)
+        cset('Bottom Playback Switch', 1)
+        cset('TX_DEC0 Volume', MIC_GAIN)
+        cset('TX_DEC1 Volume', MIC_GAIN)
+        log('voice path closed')
+
+    def update_voice(self):
+        if any(s in MM_ACTIVE for s in self.calls.values()):
+            self.voice_on()
+        else:
+            self.voice_off()
+            if self.speaker or self.mic_muted:
+                self.speaker = False
+                self.mic_muted = False
+                self.changed()
+
+    # --- ModemManager ------------------------------------------------------
+
+    def on_call_state(self, _conn, _sender, path, _iface, _signal, params, _data):
+        old, new, _reason = params.unpack()
+        if new == 7:  # terminated
+            self.calls.pop(path, None)
+        else:
+            self.calls[path] = new
+        log(f'call {path.rsplit("/", 1)[-1]}: {old} -> {new}')
+        self.update_voice()
+
+    def on_object_removed(self, _conn, _sender, _path, _iface, _signal, params, _data):
+        path, _ifaces = params.unpack()
+        if path in self.calls:
+            del self.calls[path]
+            self.update_voice()
+
+    def scan_calls(self, sysbus):
+        try:
+            res = sysbus.call_sync('org.freedesktop.ModemManager1', '/org/freedesktop/ModemManager1',
+                                   'org.freedesktop.DBus.ObjectManager', 'GetManagedObjects',
+                                   None, None, Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            return
+        for path, ifaces in res.unpack()[0].items():
+            call = ifaces.get('org.freedesktop.ModemManager1.Call')
+            if call and call.get('State', 7) != 7:
+                self.calls[path] = call['State']
+        self.update_voice()
+
+    # --- org.mobian_project.CallAudio ---------------------------------------
+
+    def props(self):
+        return {'AudioMode': GLib.Variant('u', self.mode),
+                'SpeakerState': GLib.Variant('u', int(self.speaker)),
+                'MicState': GLib.Variant('u', int(not self.mic_muted))}
+
+    def changed(self):
+        if self.conn:
+            self.conn.emit_signal(None, OBJ_PATH, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
+                                  GLib.Variant('(sa{sv}as)', (BUS_NAME, self.props(), [])))
+
+    def on_method(self, _conn, _sender, _path, _iface, method, params, invocation):
+        arg = params.unpack()[0]
+        if method == 'SelectMode':
+            if arg not in (0, 1):
+                invocation.return_dbus_error('org.freedesktop.DBus.Error.InvalidArgs', 'mode must be 0 or 1')
+                return
+            self.mode = arg
+            if arg == 0:
+                self.speaker = False
+                self.mic_muted = False
+            self.apply_output()
+            if self.pcms:
+                self.apply_mic()
+        elif method == 'EnableSpeaker':
+            self.speaker = bool(arg)
+            self.apply_output()
+        elif method == 'MuteMic':
+            self.mic_muted = bool(arg)
+            if self.pcms:
+                self.apply_mic()
+        log(f'{method}({arg})')
+        self.changed()
+        invocation.return_value(GLib.Variant('(b)', (True,)))
+
+    def on_get_property(self, _conn, _sender, _path, _iface, name):
+        return self.props()[name]
+
+    def on_bus_acquired(self, conn, _name):
+        self.conn = conn
+        node = Gio.DBusNodeInfo.new_for_xml(IFACE_XML)
+        conn.register_object(OBJ_PATH, node.interfaces[0], self.on_method, self.on_get_property, None)
+
+
+def main():
+    ca = CallAudio()
+    sysbus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    sysbus.signal_subscribe('org.freedesktop.ModemManager1', 'org.freedesktop.ModemManager1.Call',
+                            'StateChanged', None, None, Gio.DBusSignalFlags.NONE, ca.on_call_state, None)
+    sysbus.signal_subscribe('org.freedesktop.ModemManager1', 'org.freedesktop.DBus.ObjectManager',
+                            'InterfacesRemoved', None, None, Gio.DBusSignalFlags.NONE, ca.on_object_removed, None)
+    Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.REPLACE,
+                     ca.on_bus_acquired, None, lambda *_: (log('lost the bus name'), sys.exit(1)))
+    ca.scan_calls(sysbus)
+    log('op9-callaudio running')
+    loop = GLib.MainLoop()
+    try:
+        loop.run()
+    finally:
+        ca.voice_off()
+
+
+if __name__ == '__main__':
+    main()
