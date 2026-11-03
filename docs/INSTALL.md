@@ -317,16 +317,22 @@ upstream crash fixes. Build them on the phone like the packages in step 8, `qrtr
 
 ```sh
 sudo pacman -S --needed vala gobject-introspection bash-completion
-for d in qrtr rmtfs tqftpserv modemmanager; do
+for d in qrtr rmtfs tqftpserv modemmanager 81voltd; do
     (cd ~/op9-pkgs/$d && makepkg -si) || break
 done
-sudo systemctl enable --now tqftpserv op9-sim-provision ModemManager
+sudo systemctl enable --now tqftpserv op9-sim-provision 81voltd ModemManager
 sudo systemctl start rmtfs     # starts by itself on later boots
 ```
 
 The modem firmware doesn't open a session for the SIM by itself (on Android the radio layer
 does), so `op9-sim-provision` does it at boot, before ModemManager starts. A SIM inserted while
 the phone is running needs `sudo systemctl restart op9-sim-provision ModemManager`.
+
+Calls on carriers without 3G, such as AT&T, need VoLTE. The modem's own IMS stack handles it, but
+it first asks the phone side to bring up the `ims` data connection, which Android's
+`imsdatadaemon` does. `81voltd` answers that request through ModemManager, and the `rootfs/`
+drop-in starts it before ModemManager so the request at power-on isn't missed. The modem picks
+its carrier configuration, such as "VoLTE-ATT", from the SIM by itself.
 
 Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
 

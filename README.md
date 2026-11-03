@@ -50,7 +50,8 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | USB-C analog headset | 🟡 | Routing is set up; untested without an analog adapter |
 | Mobile data | ✅ | LTE, IPv4 and IPv6, tested on AT&T |
-| Calls and SMS | 🟡 | The modem offers both; not tested yet, and call audio needs a voice driver mainline lacks |
+| Calls | 🟡 | VoLTE calls connect both ways on AT&T, but there's no call audio yet |
+| SMS | ✅ | Sending and receiving, over IMS on AT&T |
 | GPS | ❌ | Not working; probably depends on the modem |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 

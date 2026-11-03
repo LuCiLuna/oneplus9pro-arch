@@ -1,0 +1,28 @@
+# The IMS Data service the modem needs for VoLTE. The modem's IMS stack asks the
+# phone side (QMI service 770) to bring up the IMS data connection, which
+# Android's imsdatadaemon does; 81voltd does it through ModemManager.
+# Not in the Arch Linux ARM repos.
+
+pkgname=81voltd
+pkgver=1.2.0.r28
+_commit=a7794dd6c8ac216a97dc5a931edab2dfc46eca2a
+pkgrel=1
+pkgdesc='IMS Data service for VoLTE on Qualcomm modems over QMI/QRTR'
+arch=(aarch64)
+url='https://gitlab.nura.eco/modem/81voltd'
+license=('GPL-2.0-or-later')
+depends=(glib2 glibc libmm-glib libqmi qrtr modemmanager)
+makedepends=(git meson)
+source=("git+$url.git#commit=$_commit")
+b2sums=('SKIP')
+
+build() {
+  arch-meson $pkgname build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  # OpenRC script
+  rm -r "$pkgdir/etc"
+}

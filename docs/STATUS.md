@@ -64,7 +64,7 @@ been attempted on Linux.
 
 1. Improve camera quality and check video recording
 2. Reach deeper sleep, including cutting touch power
-3. Test calls, SMS and GPS, and add call audio
+3. Add call audio and test GPS
 4. Get a display from USB-C docks
 5. Test an analog USB-C headset
 6. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
