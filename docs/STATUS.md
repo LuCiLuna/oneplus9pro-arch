@@ -18,6 +18,7 @@ tested on earlier builds of the series and haven't been rerun since.
 | 4K60 VP9 on YouTube's mobile site | 32 dropped of 2,145 in the player's own stats |
 | Firefox scrolling test, 30 s of a heavy page | 116 fps, up from 109–114; stalls over 100 ms 0–1, down from 1–6 |
 | Sleep (s2idle), before the modem was running | About 40–44 mA, roughly 1.5 days of standby (estimate) |
+| Overnight standby, modem running, no SIM | 41 mA average over 3 h 19 min unplugged, including 16 min awake before the idle suspend; then one uninterrupted 3 h sleep |
 | GPS cold start, outdoors, no assistance data | 12 satellites in view after 45 s, fix after 65 s |
 | USB 3 flash drive | 94.5 MB/s read |
 | Charging | 8.84 V at up to 2.77 A on a 25 W charger |
@@ -26,8 +27,9 @@ tested on earlier builds of the series and haven't been rerun since.
 ## Known problems
 
 - **Sleep:** the chip doesn't reach its deepest sleep state, and "deep" suspend wakes by itself, so
-  `s2idle` is used. The 40–44 mA figure was measured before the modem was running, and standby
-  with the modem registered hasn't been measured yet. `qcom_stats` in debugfs shows which
+  `s2idle` is used. The 40–44 mA figure was measured before the modem was running. With the modem
+  running and no SIM, standby measured 41 mA, so the modem itself costs nothing measurable. Standby
+  with a SIM registered for data and VoLTE hasn't been measured yet. `qcom_stats` in debugfs shows which
   subsystem keeps the chip out of its deepest state.
 - **Wireless charging:** the temperature limits haven't been seen to trigger on wireless, since the
   phone stayed under 38 °C. They use the same code as USB. Using OTG while on a wireless charger isn't
@@ -56,8 +58,8 @@ tested on earlier builds of the series and haven't been rerun since.
   from this modem's NMEA, so apps treat every fix as exact. Fixes measured outdoors stayed within
   about 11 m of their average. There's no assisted GPS yet, so a cold start takes about a minute;
   ModemManager can inject XTRA assistance data and set a SUPL server, which hasn't been tried.
-- **Modem without a SIM:** the modem keeps running and searching for emergency service. Its
-  effect on standby battery hasn't been measured.
+- **Modem without a SIM:** the modem keeps running. Standby averaged 41 mA that way, the same as
+  before the modem was brought up.
 - **Modem storage is read-only:** `rmtfs` runs with `-r`, so the modem's writes to its storage
   stay in memory and the EFS partitions can never be changed from Linux. Anything the modem wants
   to remember across reboots is lost. This is deliberate; don't "fix" it.
@@ -87,7 +89,8 @@ been attempted on Linux.
 
 ## Next
 
-1. Measure standby with the modem running, then reach deeper sleep, including cutting touch power
+1. Measure standby with a SIM registered for data and VoLTE, then reach deeper sleep, including
+   cutting touch power
 2. Call audio through wired headsets, then Bluetooth
 3. Assisted GPS for faster fixes, and real accuracy figures through geoclue
 4. Set the Wi-Fi and Bluetooth addresses at boot instead of at build time, towards one kernel and
