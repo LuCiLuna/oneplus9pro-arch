@@ -52,6 +52,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Mobile data | ✅ | LTE, IPv4 and IPv6, tested on AT&T |
 | Calls | ✅ | VoLTE on AT&T, both directions, with audio through the earpiece; speaker and mute from the call screen |
 | SMS | ✅ | Sending and receiving, over IMS on AT&T |
+| MMS | 🟡 | Receiving works with mmsd-tng and Chatty; sending not tested yet |
 | GPS | ✅ | Apps get it through geoclue; first fix in about a minute outdoors without assistance data, fixes within about 11 m of each other. Turn on Location Services in Settings |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 

@@ -345,6 +345,12 @@ sudo pacman -S gnome-calls chatty
 systemctl --user enable --now op9-callaudio
 ```
 
+For picture messages, build `userspace/mmsd-tng` (it needs `c-ares`) and run
+`systemctl --user enable --now mmsd-tng` as `alarm`. On first run it writes
+`~/.mms/modemmanager/mms`. If it can't find your carrier, stop it and set `CarrierMMSC`,
+`CarrierMMSProxy` and `MMS_APN` there. For AT&T: `http://mmsc.mobile.att.net`,
+`proxy.mobile.att.net:80` and `nrphone`.
+
 Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
 
 ```sh
