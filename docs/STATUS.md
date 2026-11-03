@@ -2,9 +2,11 @@
 
 Tested on one T-Mobile LE2127 running kernel 7.3 with this patch series.
 
-Wi-Fi, sleep, video decoding, Bluetooth, vibration, the flashlight, NFC card detection, the buttons,
-the alert slider and wireless charging were tested after memory scaling was added. The other features were tested on earlier builds of the
-series and haven't been rerun since.
+The modem features (mobile data, calls, SMS, MMS, GPS and call audio), the earpiece and the
+speaker limiter were tested on the current series. Wi-Fi, sleep, video decoding, Bluetooth,
+vibration, the flashlight, NFC card detection, the buttons, the alert slider and wireless charging
+were tested after memory scaling was added, before the modem was running. The other features were
+tested on earlier builds of the series and haven't been rerun since.
 
 ## Numbers
 
@@ -15,7 +17,8 @@ series and haven't been rerun since.
 | Dropped frames in those runs | 158–321 of about 7,000, mostly in the first 45 seconds |
 | 4K60 VP9 on YouTube's mobile site | 32 dropped of 2,145 in the player's own stats |
 | Firefox scrolling test, 30 s of a heavy page | 116 fps, up from 109–114; stalls over 100 ms 0–1, down from 1–6 |
-| Sleep (s2idle) | About 40–44 mA, roughly 1.5 days of standby (estimate) |
+| Sleep (s2idle), before the modem was running | About 40–44 mA, roughly 1.5 days of standby (estimate) |
+| GPS cold start, outdoors, no assistance data | 12 satellites in view after 45 s, fix after 65 s |
 | USB 3 flash drive | 94.5 MB/s read |
 | Charging | 8.84 V at up to 2.77 A on a 25 W charger |
 | Wireless charging, from a Galaxy S26 Ultra's reverse charging | About 2.2 W in; up to +97 mA at the battery with the phone idle |
@@ -23,7 +26,9 @@ series and haven't been rerun since.
 ## Known problems
 
 - **Sleep:** the chip doesn't reach its deepest sleep state, and "deep" suspend wakes by itself, so
-  `s2idle` is used.
+  `s2idle` is used. The 40–44 mA figure was measured before the modem was running, and standby
+  with the modem registered hasn't been measured yet. `qcom_stats` in debugfs shows which
+  subsystem keeps the chip out of its deepest state.
 - **Wireless charging:** the temperature limits haven't been seen to trigger on wireless, since the
   phone stayed under 38 °C. They use the same code as USB. Using OTG while on a wireless charger isn't
   handled. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
@@ -49,9 +54,24 @@ series and haven't been rerun since.
 - **Clock:** the PMIC real-time clock is read-only, so `rtc-offset` stores an offset in a file.
 - **GPS:** geoclue reports an accuracy of 0 m for modem fixes, because it doesn't compute accuracy
   from this modem's NMEA, so apps treat every fix as exact. Fixes measured outdoors stayed within
-  about 11 m of their average. There's no assisted GPS yet, so a cold start takes about a minute.
+  about 11 m of their average. There's no assisted GPS yet, so a cold start takes about a minute;
+  ModemManager can inject XTRA assistance data and set a SUPL server, which hasn't been tried.
 - **Modem without a SIM:** the modem keeps running and searching for emergency service. Its
   effect on standby battery hasn't been measured.
+- **Modem storage is read-only:** `rmtfs` runs with `-r`, so the modem's writes to its storage
+  stay in memory and the EFS partitions can never be changed from Linux. Anything the modem wants
+  to remember across reboots is lost. This is deliberate; don't "fix" it.
+- **SIM slots:** `op9-sim-provision` opens a session for the first USIM in slot 1 only. The second
+  slot and eSIM haven't been tried. A SIM inserted while running needs the services restarted.
+- **Call audio:** only the earpiece and speaker are routed during a call. A wired headset needs a
+  voice route to the codec's RX path and a jack check in `op9-callaudio`. Bluetooth is harder: the
+  call stays inside the audio DSP and never reaches PipeWire, so HFP can't carry it without a DSP
+  Bluetooth port or a loopback through a host PCM. `op9-callaudio` also expects the phone's sound
+  card at index 0, which a USB audio device or an HDMI adapter can shift.
+- **Bluetooth address:** it's substituted into the device tree at build time, so every phone needs
+  its own kernel build. Now that the modem runs, it could be read from modem storage over QMI at
+  boot, the way stock does, which together with a runtime Wi-Fi address would let one kernel serve
+  every phone.
 - **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
   bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
 
@@ -67,9 +87,14 @@ been attempted on Linux.
 
 ## Next
 
-1. Improve camera quality and check video recording
-2. Reach deeper sleep, including cutting touch power
-3. Call audio through headsets and Bluetooth, and assisted GPS for faster fixes
-4. Get a display from USB-C docks
-5. Test an analog USB-C headset
-6. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+1. Measure standby with the modem running, then reach deeper sleep, including cutting touch power
+2. Call audio through wired headsets, then Bluetooth
+3. Assisted GPS for faster fixes, and real accuracy figures through geoclue
+4. Set the Wi-Fi and Bluetooth addresses at boot instead of at build time, towards one kernel and
+   a prebuilt image for every phone
+5. Get a display from USB-C docks
+6. Test an analog USB-C headset and a Bluetooth headset's microphone
+7. Improve camera quality and check video recording
+8. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
+9. Build the `userspace/` packages in CI on an ARM runner, so the install guide's package steps are
+   checked on every change

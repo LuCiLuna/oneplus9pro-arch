@@ -35,7 +35,8 @@ Android is about to be wiped, so copy these now, as root:
 Don't share the last two or post them publicly. Also keep `vendor_boot.img` from your LineageOS build.
 
 Write down your **Bluetooth address** too. Android shows it under Settings → About phone. The chip
-has no address of its own, and stock reads it from the modem, which isn't running here. On the one
+has no address of its own: stock reads it from the modem's storage over QMI at boot, and this port
+sets it in the device tree when the kernel is built instead. On the one
 phone tested, it was the Wi-Fi address minus 1, but that's a single example, so don't rely on it.
 
 ## 3. Build the kernel
@@ -349,7 +350,14 @@ For picture messages, build `userspace/mmsd-tng` (it needs `c-ares`) and run
 `systemctl --user enable --now mmsd-tng` as `alarm`. On first run it writes
 `~/.mms/modemmanager/mms`. If it can't find your carrier, stop it and set `CarrierMMSC`,
 `CarrierMMSProxy` and `MMS_APN` there. For AT&T: `http://mmsc.mobile.att.net`,
-`proxy.mobile.att.net:80` and `nrphone`.
+`proxy.mobile.att.net:80` and `nrphone`. Sending and receiving pictures both work with these
+settings.
+
+`op9-sim-provision` opens the session for the first USIM in SIM slot 1. The second slot and eSIM
+haven't been tried.
+
+During a call, audio only goes to the earpiece or the speaker. Wired and Bluetooth headsets aren't
+routed yet; see [STATUS](STATUS.md).
 
 Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
 
@@ -359,7 +367,8 @@ sudo nmcli connection add type gsm ifname '*' con-name 'Mobile data' apn nrphone
 
 `rmtfs` serves the modem's storage from the `modemst1`, `modemst2`, `fsg` and `fsc` partitions.
 The packaged service runs it with `-r`, so the modem's writes stay in memory and those partitions
-are only read. `rmtfs` then starts the modem. Check it with:
+are only read: Linux can never corrupt them, and the modem forgets anything it saved when the
+phone reboots. Keep it that way. `rmtfs` then starts the modem. Check it with:
 
 ```sh
 cat /sys/class/remoteproc/remoteproc1/state    # running

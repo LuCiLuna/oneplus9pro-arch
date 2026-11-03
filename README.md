@@ -37,7 +37,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
-| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; Bluetooth LE scanning works; each phone must set its own address |
+| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; Bluetooth LE scanning works; each phone sets its own address when building the kernel |
 | Buttons | ✅ | Power, volume up and volume down |
 | Alert slider | ✅ | Top silent, middle vibrate, bottom ring |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
@@ -47,12 +47,12 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Firefox | ✅ | Phone layout with mobile sites, using `mobile-config-firefox`; smooth after the scheduler fix. YouTube's mobile page clips its left edge unless zoomed to 80% |
 | Android apps | ✅ | Waydroid with Android 13 (LineageOS 20): GPU acceleration, internet, sound and Google Play. A **Stop Android** launcher shuts it down |
 | App launching | ✅ | No loading splash, since apps here usually open before it would go away |
-| Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
+| Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, measured before the modem was running; the chip doesn't reach its deepest sleep state |
 | USB-C analog headset | 🟡 | Routing is set up; untested without an analog adapter |
 | Mobile data | ✅ | LTE, IPv4 and IPv6, tested on AT&T |
-| Calls | ✅ | VoLTE on AT&T, both directions, with audio through the earpiece; speaker and mute from the call screen |
+| Calls | ✅ | VoLTE on AT&T, both directions, with audio through the earpiece; speaker and mute from the call screen. Headsets and Bluetooth aren't routed during calls yet |
 | SMS | ✅ | Sending and receiving, over IMS on AT&T |
-| MMS | 🟡 | Receiving works with mmsd-tng and Chatty; sending not tested yet |
+| MMS | ✅ | Sending and receiving pictures with mmsd-tng and Chatty, on AT&T |
 | GPS | ✅ | Apps get it through geoclue; first fix in about a minute outdoors without assistance data, fixes within about 11 m of each other. Turn on Location Services in Settings |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 
@@ -99,6 +99,11 @@ This builds on other people's work, and their authorship is kept in the patches:
   [sm8350-mainline](https://gitlab.com/sm8350-mainline) project, for the original port
 - **David Heidelberg** for the CAMSS C-PHY series
 - **Vsevolod Nevorotov** for the Synaptics TouchComm driver
+- **Stephan Gerhold**, **Richard Acayan**, **Vincent Knecht**, **Otto Pflüger**, **Bhushan Shah** and
+  **Val Packett** for the q6voice call audio series, as carried by
+  [sc7280-mainline](https://gitlab.com/sc7280-mainline) for the Fairphone 5
+- **postmarketOS** for `81voltd` and `mobile-config-firefox`, and **linux-msm** for `rmtfs`,
+  `tqftpserv`, `qrtr` and `hexagonrpc`
 - The Linux, Arch Linux ARM, postmarketOS, Phosh, libcamera and linux-msm communities
 
 ## License

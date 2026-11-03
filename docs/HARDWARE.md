@@ -36,6 +36,8 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 | Mono | GalaxyCore GC02M1B, 1-lane |
 | Front camera | Sony IMX471 |
 | Sensors | On the SLPI, reached with hexagonrpcd and libssc |
+| Modem | Integrated in the SM8350, runs `modem.mbn` with the carrier configs from `modem_pr`; storage from `modemst1`, `modemst2`, `fsg` and `fsc` through `rmtfs`. Voice, SMS, data, SIM and location services over QRTR |
+| USB-C audio switch | FSA4480 on the SBU lines, for analog headset adapters |
 
 ## Things that cost a lot of time
 
@@ -57,5 +59,17 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 - **OTG:** the charger firmware keeps Type-C sink-only until the AP sets the OnePlus-specific properties.
 - **Bluetooth address:** the chip has none, so the kernel leaves the controller unconfigured and BlueZ
   sees nothing. Set it with `local-bd-address`, or try it live with `btmgmt --index 0 public-addr`.
+  Stock reads it from the modem's storage over QMI.
+- **Modem bring-up:** the kernel side was complete; the modem only needed `rmtfs`, `tqftpserv` and
+  ModemManager in userspace. Three things stock's radio layer does that nothing on Linux did:
+  open the SIM's provisioning session (without it ModemManager reports "GW primary session index
+  unknown"), answer the modem's request on QMI service 770 to bring up the `ims` data connection
+  before IMS registers (`81voltd`), and register as the location service's "master client" with a
+  fixed key before starting GPS (otherwise every start request fails with GeneralError).
+- **Call audio:** the voice stream never reaches the AP. It's routed inside the audio DSP, like stock's
+  `voicemmode1-call`: from the modem to TERT_MI2S_RX (the speaker amplifiers) and from
+  TX_CODEC_DMA_TX_3 (the microphones). Opening the hostless VoiceMMode1 PCM starts the session.
+- **Earpiece:** it's the top TFA9874 in stock's "receiver" profile: boost converter off, input 6 dB
+  down, speaker gain code 13, low-noise mode, bottom amplifier off.
 - **Unsafe register access:** reading unclocked display or LPASS registers from Linux, for example
   through `/dev/mem`, hangs the phone. Only use `tools/regdump.c` if you know the clocks are on.
