@@ -1,0 +1,25 @@
+# Serves files the modem asks for over QRTR, such as the carrier configs in
+# modem_pr next to modem.mbn. Not in the Arch Linux ARM repos.
+
+pkgname=tqftpserv
+_commit=eb4b9a04ff92d2753ededf32cc3b6ed287f6e29b
+pkgver=1.1.r117
+pkgrel=1
+pkgdesc='TFTP server over QRTR for Qualcomm remote processors'
+arch=(aarch64)
+url='https://github.com/linux-msm/tqftpserv'
+license=('BSD-3-Clause')
+depends=(glibc qrtr xz zstd)
+makedepends=(git meson systemd)
+source=("git+$url.git#commit=$_commit")
+b2sums=('SKIP')
+
+build() {
+  arch-meson $pkgname build -D systemd-unit-prefix=/usr/lib/systemd/system
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 $pkgname/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

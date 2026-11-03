@@ -47,7 +47,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | App launching | ✅ | No loading splash, since apps here usually open before it would go away |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | USB-C analog headset | 🟡 | Routing is set up; untested without an analog adapter |
-| Modem, calls, SMS, mobile data | ❌ | Modem processor is offline |
+| Modem, calls, SMS, mobile data | 🟡 | The modem boots and offers its voice, SMS, data and location services; no SIM detected yet |
 | GPS | ❌ | Not working; probably depends on the modem |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 
@@ -60,7 +60,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 | [`kernel/`](kernel) | 114 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
-| [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots |
+| [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, and the modem services |
 | [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding, and its settings |
 | [`tools/`](tools) | Source for helper tools |
 | [`docs/`](docs) | [Install guide](docs/INSTALL.md), [status](docs/STATUS.md) and [hardware notes](docs/HARDWARE.md) |

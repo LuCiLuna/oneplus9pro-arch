@@ -1,0 +1,25 @@
+# QRTR userspace library and tools, needed by rmtfs and tqftpserv for the modem.
+# Not in the Arch Linux ARM repos.
+
+pkgname=qrtr
+pkgver=1.2
+_commit=29e36ae164389580a0f8ea7a7fdb728140ae978d
+pkgrel=1
+pkgdesc='Qualcomm IPC Router userspace library and tools'
+arch=(aarch64)
+url='https://github.com/linux-msm/qrtr'
+license=('BSD-3-Clause')
+depends=(glibc)
+makedepends=(git meson)
+source=("git+$url.git#commit=$_commit")
+b2sums=('SKIP')
+
+build() {
+  arch-meson $pkgname build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 $pkgname/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

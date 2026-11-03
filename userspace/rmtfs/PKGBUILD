@@ -1,0 +1,26 @@
+# Serves the modem's EFS storage. The packaged rmtfs.service runs it as
+# "rmtfs -r -P -s": it reads the modemst1, modemst2, fsg and fsc partitions,
+# keeps the modem's writes in memory only (-r), and starts the modem when ready.
+# Not in the Arch Linux ARM repos.
+
+pkgname=rmtfs
+_commit=b30a3eb38f9af283f18dbd3c7755653efc52c094
+pkgver=1.1.r84
+pkgrel=1
+pkgdesc='Qualcomm remote filesystem service for the modem'
+arch=(aarch64)
+url='https://github.com/linux-msm/rmtfs'
+license=('BSD-3-Clause')
+depends=(glibc qrtr systemd-libs)
+makedepends=(git)
+source=("git+$url.git#commit=$_commit")
+b2sums=('SKIP')
+
+build() {
+  make -C $pkgname prefix=/usr
+}
+
+package() {
+  make -C $pkgname prefix=/usr DESTDIR="$pkgdir" install
+  install -Dm644 $pkgname/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

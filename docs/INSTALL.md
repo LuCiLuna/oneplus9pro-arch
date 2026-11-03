@@ -108,6 +108,7 @@ for n in a660_zap ipa_fws vpu20_4v; do
     sudo tools/pil-squash.py $FW/$n.mbn firmware/$n.mdt
 done
 sudo cp image/*.jsn firmware/a660_sqe.fw firmware/a660_gmu.bin $FW/
+sudo cp -r image/modem_pr $FW/     # carrier configs the modem reads at boot
 sudo ln -s sm8350/OnePlus/lemonade/a660_sqe.fw /mnt/op9/usr/lib/firmware/qcom/a660_sqe.fw
 sudo ln -s sm8350/OnePlus/lemonade/a660_gmu.bin /mnt/op9/usr/lib/firmware/qcom/a660_gmu.bin
 
@@ -308,6 +309,29 @@ Phosh shows a splash until an app's window appears, which often outlasts the app
 here. `op9-no-splash` writes copies of the launchers that skip it into
 `~/.local/share/applications`, and the pacman hook in `rootfs/` reruns it after installs. Run it
 once as `alarm`, and `op9-no-splash --undo` to remove the copies.
+
+## 13. Modem
+
+The modem needs three services that Arch Linux ARM doesn't package. Build them on the phone like
+the packages in step 8, `qrtr` first:
+
+```sh
+for d in qrtr rmtfs tqftpserv; do
+    (cd ~/op9-pkgs/$d && makepkg -si) || break
+done
+sudo pacman -S modemmanager
+sudo systemctl enable --now tqftpserv ModemManager
+sudo systemctl start rmtfs     # starts by itself on later boots
+```
+
+`rmtfs` serves the modem's storage from the `modemst1`, `modemst2`, `fsg` and `fsc` partitions.
+The packaged service runs it with `-r`, so the modem's writes stay in memory and those partitions
+are only read. `rmtfs` then starts the modem. Check it with:
+
+```sh
+cat /sys/class/remoteproc/remoteproc1/state    # running
+mmcli -L
+```
 
 ## How this phone got here
 
