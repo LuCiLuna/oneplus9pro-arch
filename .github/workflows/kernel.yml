@@ -1,0 +1,56 @@
+# Proves the patch series still applies to v7.3 and that the kernel, its
+# built-in device tree and the modules compile with kernel/op9.config.
+# The phone's own Wi-Fi and Bluetooth addresses are not used here.
+name: Kernel build
+
+on:
+  push:
+    paths: [kernel/**, .github/workflows/kernel.yml]
+  pull_request:
+    paths: [kernel/**, .github/workflows/kernel.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev cpio kmod python3
+
+      - name: Fetch Linux v7.3
+        # GitHub's mirror is much faster from Actions than git.kernel.org
+        run: git clone -q --depth 1 --branch v7.3 https://github.com/torvalds/linux.git work/linux
+
+      - name: Apply the patch series
+        run: |
+          cd work/linux
+          git -c user.name=ci -c user.email=ci@localhost am -q ../../kernel/patches/*.patch
+          echo "Applied $(git rev-list --count HEAD~$(ls ../../kernel/patches | wc -l)..HEAD) patches"
+
+      - name: Build the device tree, Image and modules
+        # Debug info only slows the CI build down; it doesn't change what compiles
+        run: |
+          sed -i 's/^CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y/CONFIG_DEBUG_INFO_NONE=y/' kernel/op9.config
+          if ! JOBS=$(($(nproc) + 1)) kernel/build.sh work > build.log 2>&1; then
+            grep -E 'error:|Error [0-9]' build.log | head -40; tail -40 build.log; exit 1
+          fi
+          grep -E 'warning:' build.log | sort -u || true
+          ls -l work/build/arch/arm64/boot/Image work/build/op9-builtin.dtb
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 14

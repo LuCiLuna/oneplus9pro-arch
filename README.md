@@ -1,5 +1,7 @@
 # Arch Linux ARM on the OnePlus 9 Pro
 
+[![Kernel build](https://github.com/LuCiLuna/oneplus9pro-arch/actions/workflows/kernel.yml/badge.svg)](https://github.com/LuCiLuna/oneplus9pro-arch/actions/workflows/kernel.yml)
+
 Native Arch Linux ARM on the OnePlus 9 Pro (`lemonadep`, Snapdragon 888 / SM8350) with a
 mainline Linux 7.3 kernel, the Phosh phone interface and no Android underneath.
 
