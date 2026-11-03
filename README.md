@@ -49,7 +49,8 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | App launching | ✅ | No loading splash, since apps here usually open before it would go away |
 | Sleep | 🟡 | Sleeps and wakes at about 40–44 mA, but the chip doesn't reach its deepest sleep state |
 | USB-C analog headset | 🟡 | Routing is set up; untested without an analog adapter |
-| Modem, calls, SMS, mobile data | 🟡 | The modem boots and offers its voice, SMS, data and location services; no SIM detected yet |
+| Mobile data | ✅ | LTE, IPv4 and IPv6, tested on AT&T |
+| Calls and SMS | 🟡 | The modem offers both; not tested yet, and call audio needs a voice driver mainline lacks |
 | GPS | ❌ | Not working; probably depends on the modem |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 

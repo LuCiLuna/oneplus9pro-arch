@@ -312,16 +312,26 @@ once as `alarm`, and `op9-no-splash --undo` to remove the copies.
 
 ## 13. Modem
 
-The modem needs three services that Arch Linux ARM doesn't package. Build them on the phone like
-the packages in step 8, `qrtr` first:
+The modem needs three services that Arch Linux ARM doesn't package, and a ModemManager with two
+upstream crash fixes. Build them on the phone like the packages in step 8, `qrtr` first:
 
 ```sh
-for d in qrtr rmtfs tqftpserv; do
+sudo pacman -S --needed vala gobject-introspection bash-completion
+for d in qrtr rmtfs tqftpserv modemmanager; do
     (cd ~/op9-pkgs/$d && makepkg -si) || break
 done
-sudo pacman -S modemmanager
-sudo systemctl enable --now tqftpserv ModemManager
+sudo systemctl enable --now tqftpserv op9-sim-provision ModemManager
 sudo systemctl start rmtfs     # starts by itself on later boots
+```
+
+The modem firmware doesn't open a session for the SIM by itself (on Android the radio layer
+does), so `op9-sim-provision` does it at boot, before ModemManager starts. A SIM inserted while
+the phone is running needs `sudo systemctl restart op9-sim-provision ModemManager`.
+
+Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
+
+```sh
+sudo nmcli connection add type gsm ifname '*' con-name 'Mobile data' apn nrphone
 ```
 
 `rmtfs` serves the modem's storage from the `modemst1`, `modemst2`, `fsg` and `fsc` partitions.

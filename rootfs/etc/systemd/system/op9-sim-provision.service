@@ -1,0 +1,13 @@
+[Unit]
+Description=Open the SIM provisioning session on the OnePlus 9 Pro modem
+After=rmtfs.service
+Wants=rmtfs.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/op9-sim-provision
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
