@@ -1,0 +1,43 @@
+# Publishes a release when a v* tag is pushed: the kernel build's Image,
+# modules, initramfs and the scripts that pack them into a boot image. No
+# firmware, no stock DTB blob and no per-phone data: all of that comes from
+# the user's own phone, as docs/INSTALL.md describes. A root filesystem
+# tarball can join this later.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/kernel.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: op9-kernel
+          path: out
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          krel=$(cat out/KERNEL_RELEASE)
+          cat > notes.md <<NOTES
+          Kernel \`$krel\` for the OnePlus 9 Pro: \`Image\`, the modules, the initramfs and the
+          scripts that pack them into a boot image with your phone's own \`vendor_boot.img\`:
+
+              ./op9-boot-image.sh vendor_boot.img Image initramfs.gz op9-boot.img
+
+          The firmware, the stock DTB blob and your phone's sensor calibration are not included
+          and come from your phone. Follow the install guide for this tag; it erases the phone.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "OnePlus 9 Pro kernel $krel ($GITHUB_REF_NAME)" --notes-file notes.md out/*

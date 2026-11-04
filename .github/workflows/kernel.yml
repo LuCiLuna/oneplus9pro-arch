@@ -1,14 +1,18 @@
 # Proves the patch series still applies to v7.3 and that the kernel, its
-# built-in device tree and the modules compile with kernel/op9.config.
-# The phone's own Wi-Fi and Bluetooth addresses are not used here.
+# built-in device tree and the modules compile with kernel/op9.config, then
+# packages what a release ships: Image, modules, initramfs and the boot image
+# scripts. The phone's addresses are read from the modem at boot, so nothing
+# built here is specific to one phone. release.yml calls this on a tag.
 name: Kernel build
 
 on:
   push:
-    paths: [kernel/**, .github/workflows/kernel.yml]
+    branches: ['**']
+    paths: [kernel/**, initramfs/**, scripts/**, .github/workflows/kernel.yml]
   pull_request:
-    paths: [kernel/**, .github/workflows/kernel.yml]
+    paths: [kernel/**, initramfs/**, scripts/**, .github/workflows/kernel.yml]
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: kernel-${{ github.ref }}
@@ -25,27 +29,46 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
-            gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev cpio kmod python3
+            gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev cpio kmod python3 bzip2 zstd
 
       - name: Fetch Linux v7.3
-        # GitHub's mirror is much faster from Actions than git.kernel.org
+        # GitHub's mirror is much faster from Actions than git.kernel.org;
+        # kernel/build.sh applies the series to it
         run: git clone -q --depth 1 --branch v7.3 https://github.com/torvalds/linux.git work/linux
 
-      - name: Apply the patch series
-        run: |
-          cd work/linux
-          git -c user.name=ci -c user.email=ci@localhost am -q ../../kernel/patches/*.patch
-          echo "Applied $(git rev-list --count HEAD~$(ls ../../kernel/patches | wc -l)..HEAD) patches"
-
-      - name: Build the device tree, Image and modules
+      - name: Apply the series and build the device tree, Image and modules
         # Debug info only slows the CI build down; it doesn't change what compiles
         run: |
           sed -i 's/^CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y/CONFIG_DEBUG_INFO_NONE=y/' kernel/op9.config
           if ! JOBS=$(($(nproc) + 1)) kernel/build.sh work > build.log 2>&1; then
-            grep -E 'error:|Error [0-9]' build.log | head -40; tail -40 build.log; exit 1
+            grep -E 'error:|Error [0-9]|Patch failed|does not apply' build.log | head -40; tail -40 build.log; exit 1
           fi
+          echo "Applied $(git -C work/linux rev-list --count v7.3..HEAD) patches"
           grep -E 'warning:' build.log | sort -u || true
           ls -l work/build/arch/arm64/boot/Image work/build/op9-builtin.dtb
+
+      - name: Build the initramfs
+        run: |
+          initramfs/busybox.sh work/busybox
+          initramfs/build.sh work/busybox work/initramfs.gz
+
+      - name: Package the release files
+        run: |
+          krel=$(cat work/build/include/config/kernel.release)
+          mkdir out
+          cp work/build/arch/arm64/boot/Image out/Image
+          tar -C work/modroot -cf - lib | zstd -T0 -19 -q -o "out/modules-$krel.tar.zst"
+          cp work/initramfs.gz scripts/mkboot.sh scripts/op9-boot-image.sh out/
+          echo "$krel" > out/KERNEL_RELEASE
+          (cd out && sha256sum -- * > SHA256SUMS)
+          ls -l out
+
+      - name: Keep the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: op9-kernel
+          path: out
+          retention-days: 30
 
       - name: Keep the log
         if: always()
