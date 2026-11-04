@@ -1,0 +1,71 @@
+#!/bin/bash
+# Gives Wi-Fi and Bluetooth this phone's own addresses, which the modem keeps: its DMS service
+# answers "Get MAC Address" for both, as stock reads them. With the addresses set here instead of
+# in the device tree, one kernel serves every phone. The modem needs rmtfs and takes a few seconds
+# to start, so the addresses are cached for later boots and checked against the modem each time.
+set -u
+CACHE=/var/lib/op9/addresses
+WAIT=30
+
+log() { echo "$*"; }
+
+# The modem returns the bytes in reverse order
+from_modem() {
+	qmicli -p -d qrtr://0 --dms-get-mac-address="$1" 2>/dev/null | tail -n1 | tr -d ' \t' |
+		grep -E '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$' | tr : '\n' | tac | paste -sd: | tr A-F a-f
+}
+
+wifi_iface() {
+	local i
+	for i in /sys/class/net/*/wireless; do
+		[ -e "$i" ] && { basename "$(dirname "$i")"; return; }
+	done
+}
+
+set_wifi() {
+	local addr=$1 dev n
+	for ((n = 0; n < WAIT; n++)); do dev=$(wifi_iface); [ -n "$dev" ] && break; sleep 1; done
+	[ -z "$dev" ] && { log "no Wi-Fi interface"; return 1; }
+	[ "$(cat /sys/class/net/$dev/address)" = "$addr" ] && return 0
+	local up=; ip link show "$dev" | grep -q '[<,]UP[,>]' && up=1
+	[ -n "$up" ] && ip link set dev "$dev" down
+	ip link set dev "$dev" address "$addr" && log "Wi-Fi $dev: address set"
+	[ -n "$up" ] && ip link set dev "$dev" up
+	return 0
+}
+
+set_bt() {
+	local addr=$1 n cur
+	for ((n = 0; n < WAIT; n++)); do [ -e /sys/class/bluetooth/hci0 ] && break; sleep 1; done
+	[ -e /sys/class/bluetooth/hci0 ] || { log "no Bluetooth adapter"; return 1; }
+	cur=$(btmgmt --index 0 info 2>/dev/null | grep -o -m1 'addr [0-9A-Fa-f:]*' | cut -d' ' -f2 | tr A-F a-f)
+	[ "$cur" = "$addr" ] && return 0
+	btmgmt --index 0 public-addr "$addr" >/dev/null && log "Bluetooth: address set"
+}
+
+apply() { [ -n "$1" ] && set_wifi "$1"; [ -n "$2" ] && set_bt "$2"; }
+
+wlan= bt=
+[ -r "$CACHE" ] && . "$CACHE" && apply "$wlan" "$bt"
+
+# Before the modem services are installed (INSTALL step 13) there's no one to ask
+if ! command -v qmicli >/dev/null || ! systemctl is-active --quiet rmtfs; then
+	log "no modem services yet${wlan:+, keeping the cached addresses}"
+	exit 0
+fi
+
+# Check against the modem; it answers a few seconds after rmtfs starts
+for ((n = 0; n < WAIT; n++)); do
+	new_wlan=$(from_modem wlan) && new_bt=$(from_modem bt) && [ -n "$new_wlan" ] && [ -n "$new_bt" ] && break
+	sleep 1
+done
+if [ -z "${new_wlan:-}" ] || [ -z "${new_bt:-}" ]; then
+	log "the modem didn't give the addresses${wlan:+, keeping the cached ones}"
+	exit 0
+fi
+if [ "$new_wlan" != "$wlan" ] || [ "$new_bt" != "$bt" ]; then
+	apply "$new_wlan" "$new_bt"
+	mkdir -p "${CACHE%/*}"
+	printf 'wlan=%s\nbt=%s\n' "$new_wlan" "$new_bt" > "$CACHE"
+	log "cached the modem's addresses"
+fi
