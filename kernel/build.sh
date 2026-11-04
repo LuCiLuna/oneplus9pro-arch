@@ -3,10 +3,14 @@
 #
 #   kernel/build.sh [workdir]        default workdir: ./work
 #
-# WIFI_MAC="aa bb cc dd ee ff"   this phone's Wi-Fi address, see docs/INSTALL.md
-# BT_ADDR="aa bb cc dd ee ff"    this phone's Bluetooth address, in the normal order
 # KERNEL_GIT=<url>               where to fetch v7.3 from
 # JOBS=<n>                       parallel jobs
+#
+# The default build has no addresses in it and runs on every phone: the Wi-Fi and
+# Bluetooth addresses are read from the modem at boot by op9-addresses.service.
+# To bake a phone's addresses into the device tree instead (the old way):
+# WIFI_MAC="aa bb cc dd ee ff"   this phone's Wi-Fi address
+# BT_ADDR="aa bb cc dd ee ff"    this phone's Bluetooth address, in the normal order
 set -euo pipefail
 HERE=$(dirname "$(realpath "$0")")
 WORK=$(realpath -m "${1:-work}")
@@ -32,6 +36,7 @@ if [ "$WANT" != "$(cat "$WORK/patches.sha256" 2>/dev/null || true)" ]; then
 	echo "$WANT" > "$WORK/patches.sha256"
 fi
 
+# Optional: bake the addresses in. The release build leaves them zeroed.
 if [ -n "${WIFI_MAC:-}" ]; then
 	sed -i "s/local-mac-address = \[[0-9a-f ]*\];/local-mac-address = [$WIFI_MAC];/" \
 		"$SRC/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts"
