@@ -29,7 +29,16 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
-            gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev cpio kmod python3 bzip2 zstd
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross bc bison flex libssl-dev libelf-dev cpio kmod \
+            python3 bzip2 zstd
+
+      # Before the kernel, so a failure here shows in minutes. busybox and dmcreate are static
+      # aarch64 programs, so they need the cross libc as well as the compiler.
+      - name: Build the initramfs
+        run: |
+          mkdir -p work
+          initramfs/busybox.sh work/busybox
+          initramfs/build.sh work/busybox work/initramfs.gz
 
       - name: Fetch Linux v7.3
         # GitHub's mirror is much faster from Actions than git.kernel.org;
@@ -46,11 +55,6 @@ jobs:
           echo "Applied $(git -C work/linux rev-list --count v7.3..HEAD) patches"
           grep -E 'warning:' build.log | sort -u || true
           ls -l work/build/arch/arm64/boot/Image work/build/op9-builtin.dtb
-
-      - name: Build the initramfs
-        run: |
-          initramfs/busybox.sh work/busybox
-          initramfs/build.sh work/busybox work/initramfs.gz
 
       - name: Package the release files
         run: |
