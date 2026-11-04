@@ -29,9 +29,9 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
-| Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and shows "Charged" until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
+| Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and reports the battery full until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
 | Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Works the same as USB otherwise; USB takes over if both are attached |
-| Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed |
+| Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed. fastfetch shows USB or Wireless Connected |
 | Speakers and mics | ✅ | A limiter and high-pass filter guard the speakers; it's not stock's full speaker protection |
 | Earpiece | ✅ | The top speaker in stock's receiver mode, chosen as a separate audio profile; loudness not yet checked by ear |
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |

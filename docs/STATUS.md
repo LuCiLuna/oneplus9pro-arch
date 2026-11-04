@@ -2,8 +2,8 @@
 
 Tested on one T-Mobile LE2127 running kernel 7.3 with this patch series.
 
-The modem features (mobile data, calls, SMS, MMS, GPS and call audio), the earpiece and the
-speaker limiter were tested on the current series. Wi-Fi, sleep, video decoding, Bluetooth,
+The modem features (mobile data, calls, SMS, MMS, GPS and call audio), the earpiece, the speaker
+limiter and charging to full were tested on the current series. Wi-Fi, sleep, video decoding, Bluetooth,
 vibration, the flashlight, NFC card detection, the buttons, the alert slider and wireless charging
 were tested after memory scaling was added, before the modem was running. The other features were
 tested on earlier builds of the series and haven't been rerun since.
@@ -37,7 +37,10 @@ tested on earlier builds of the series and haven't been rerun since.
 - **Charging to full:** as stock, to 4.43 V per cell (8.86 V), stopping when the gauge reports full or
   under 125 mA, and recharging 100 mV per cell lower. From full until unplugged the battery shows
   "Full" at 100%, then falls to the gauge's value at 1% a minute, like Android's UI. Cell voltages
-  aren't read, so the limits use half the pack voltage, where stock uses the higher cell.
+  aren't read, so the limits use half the pack voltage, where stock uses the higher cell. Phosh
+  marks a full battery on its charger with Adwaita's "charged" icon, which also has a lightning
+  bolt. fastfetch shows no status for a full battery and doesn't count a USB or wireless charger,
+  so `rootfs/etc/xdg/fastfetch/config.jsonc` gets its battery line from `op9-battery-line`.
 - **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
   fired during that time, the phone stays awake with the screen off until it's next used, at about
   53 mA instead of about 40.

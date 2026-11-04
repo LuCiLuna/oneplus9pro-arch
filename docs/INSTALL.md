@@ -205,6 +205,10 @@ gsettings set sm.puri.phosh.notifications wakeup-screen-triggers "['urgency','ca
 gsettings set sm.puri.phosh.notifications wakeup-screen-categories "['device.added']"
 ```
 
+If you use `fastfetch`, the config in `/etc/xdg/fastfetch/` from `rootfs/` shows the charger and
+whether the battery is charging, which fastfetch can't tell on its own here. A config of your own in
+`~/.config/fastfetch` replaces it.
+
 ## 8. Patched packages
 
 Five programs need patches. Each folder in `userspace/` has a `PKGBUILD` that builds a package
