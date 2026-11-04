@@ -1,0 +1,40 @@
+// fastfetch's default modules, with the battery line from op9-battery-line: fastfetch shows no
+// status for a full battery on its charger. A config in ~/.config/fastfetch takes over from this.
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/master/doc/json_schema.json",
+  "modules": [
+    "title",
+    "separator",
+    "os",
+    "host",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "display",
+    "de",
+    "wm",
+    "wmtheme",
+    "theme",
+    "icons",
+    "font",
+    "cursor",
+    "terminal",
+    "terminalfont",
+    "cpu",
+    "gpu",
+    "memory",
+    "swap",
+    "disk",
+    "localip",
+    {
+      "type": "command",
+      "key": "Battery",
+      "text": "/usr/local/bin/op9-battery-line"
+    },
+    "poweradapter",
+    "locale",
+    "break",
+    "colors"
+  ]
+}

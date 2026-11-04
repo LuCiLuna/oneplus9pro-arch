@@ -1,0 +1,23 @@
+#!/bin/sh
+# The battery line for fastfetch, worded as its own. fastfetch only sees a charger of type "Mains",
+# which the phone doesn't have, and shows no status for "Full", which the kernel reports from full
+# until the charger is unplugged.
+B=/sys/class/power_supply/bq28z610-0
+P=/sys/class/power_supply
+cap=$(cat $B/capacity 2>/dev/null) || { echo "Unknown"; exit 0; }
+words=
+add() { words="${words:+$words, }$1"; }
+plugged=
+[ "$(cat $P/qcom-battmgr-usb/online 2>/dev/null)" = 1 ] && { add "USB Connected"; plugged=1; }
+[ "$(cat $P/qcom-battmgr-wls/online 2>/dev/null)" = 1 ] && { add "Wireless Connected"; plugged=1; }
+case $(cat $B/status) in
+Charging) add Charging ;;
+Discharging) add Discharging ;;
+# the gauge can keep its own full flag for a while after unplugging
+Full) [ -z "$plugged" ] && add Discharging ;;
+Unknown) add Unknown ;;
+esac
+[ "$(cat $B/capacity_level 2>/dev/null)" = Critical ] && add Critical
+# fastfetch's colors for the battery percentage
+if [ "$cap" -ge 50 ]; then color=32; elif [ "$cap" -ge 20 ]; then color=33; else color=31; fi
+printf '\033[%sm%s%%\033[m%s\n' "$color" "$cap" "${words:+ [$words]}"
