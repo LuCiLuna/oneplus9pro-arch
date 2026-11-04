@@ -79,7 +79,8 @@ find_part() {
 		done
 		[ -z "$PART" ] && { n=$((n + 1)); sleep 1; }
 	done
-	[ -n "$PART" ] || { echo "op9-initramfs: $1 not found"; return 1; }
+	# stdout is captured by the caller; stderr is the kernel log
+	[ -n "$PART" ] || { echo "op9-initramfs: $1 not found" >&2; return 1; }
 	mkdir -p /dev/op9; rm -f "/dev/op9/$1"
 	mknod "/dev/op9/$1" b "${PART%:*}" "${PART#*:}"
 	echo "/dev/op9/$1"
@@ -105,7 +106,7 @@ switch_to_rootfs() {
 	find_part super >/dev/null || return
 	SUPER=$PART
 	DM=$(grep -v '^#' /etc/op9-linux.extents | while read s l o; do echo "$s $l linear $SUPER $o"; done | dmcreate linux) ||
-		{ echo "op9-initramfs: dmcreate failed"; return; }
+		{ echo "op9-initramfs: dmcreate failed" >&2; return; }
 	echo "op9-initramfs: linux -> $DM (super $SUPER)"
 	try_root "$DM"
 }
