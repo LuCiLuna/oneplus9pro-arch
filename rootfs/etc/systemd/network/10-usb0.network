@@ -5,9 +5,15 @@ Name=usb0
 [Network]
 Address=172.16.42.1/24
 DHCPServer=yes
-# Internet via the PC, if it NATs for us
-Gateway=172.16.42.2
+# Used by systemd-resolved only, when it is the resolver; NetworkManager sets its own
 DNS=1.1.1.1
+
+# Internet via the PC, if it NATs for us (scripts/op9-nat.sh). The route exists whenever a PC is
+# attached, NAT or not, so give it a metric above anything NetworkManager adds (Wi-Fi 600,
+# mobile data 700, wired docks 100) and it only carries traffic when nothing else can.
+[Route]
+Gateway=172.16.42.2
+Metric=4000
 
 [DHCPServer]
 PoolOffset=2
