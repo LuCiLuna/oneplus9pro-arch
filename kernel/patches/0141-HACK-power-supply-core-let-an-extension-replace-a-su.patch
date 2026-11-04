@@ -1,0 +1,66 @@
+From a2c007f717a984c308c07c08608dfc4fe2c040ee Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 23:20:49 -0600
+Subject: [PATCH 141/142] HACK: power: supply: core: let an extension replace a
+ supply's own properties
+
+A charger driver that runs the charging policy knows better than the
+fuel gauge whether the battery is charging, full or held back, but the
+gauge's driver already reports a status, and power_supply_register_extension()
+refuses an extension for a property the supply has.
+
+Add an override flag for such an extension. Its properties still can't
+clash with another extension's, and power_supply_get_property() already
+asks extensions first; the extension reads the supply's own values with
+power_supply_get_property_direct().
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/power/supply/power_supply_core.c | 14 +++++++++++---
+ include/linux/power_supply.h             |  5 +++++
+ 2 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/power/supply/power_supply_core.c b/drivers/power/supply/power_supply_core.c
+index 1279785645f..fa0d75ae47f 100644
+--- a/drivers/power/supply/power_supply_core.c
++++ b/drivers/power/supply/power_supply_core.c
+@@ -1583,9 +1583,17 @@ int power_supply_register_extension(struct power_supply *psy, const struct power
+ 		if (strcmp(ext->name, reg->ext->name) == 0)
+ 			return -EEXIST;
+ 
+-	for (i = 0; i < ext->num_properties; i++)
+-		if (power_supply_has_property(psy, ext->properties[i]))
+-			return -EEXIST;
++	for (i = 0; i < ext->num_properties; i++) {
++		if (!ext->override) {
++			if (power_supply_has_property(psy, ext->properties[i]))
++				return -EEXIST;
++			continue;
++		}
++		/* replacing the supply's own property, but never another extension's */
++		power_supply_for_each_extension(reg, psy)
++			if (power_supply_ext_has_property(reg->ext, ext->properties[i]))
++				return -EEXIST;
++	}
+ 
+ 	reg = kmalloc_obj(*reg);
+ 	if (!reg)
+diff --git a/include/linux/power_supply.h b/include/linux/power_supply.h
+index 0a4ea490d5e..06ebbcc76f4 100644
+--- a/include/linux/power_supply.h
++++ b/include/linux/power_supply.h
+@@ -307,6 +307,11 @@ struct power_supply_desc {
+ 
+ struct power_supply_ext {
+ 	const char *const name;
++	/*
++	 * HACK: the extension may replace properties the supply already has;
++	 * its get_property reads the originals with power_supply_get_property_direct().
++	 */
++	bool override;
+ 	u8 charge_behaviours;
+ 	u32 charge_types;
+ 	const enum power_supply_property *properties;
+-- 
+2.56.0
+

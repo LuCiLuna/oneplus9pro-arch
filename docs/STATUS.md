@@ -21,7 +21,7 @@ tested on earlier builds of the series and haven't been rerun since.
 | Overnight standby, modem running, no SIM | 41 mA average over 3 h 19 min unplugged, including 16 min awake before the idle suspend; then one uninterrupted 3 h sleep |
 | GPS cold start, outdoors, no assistance data | 12 satellites in view after 45 s, fix after 65 s |
 | USB 3 flash drive | 94.5 MB/s read |
-| Charging | 8.84 V at up to 2.77 A on a 25 W charger |
+| Charging | 8.84 V at up to 2.77 A on a 25 W charger; 64% to 100% in 58 min, then stops, with the charger running the phone (+10 mA at the battery) |
 | Wireless charging, from a Galaxy S26 Ultra's reverse charging | About 2.2 W in; up to +97 mA at the battery with the phone idle |
 
 ## Known problems
@@ -34,6 +34,10 @@ tested on earlier builds of the series and haven't been rerun since.
 - **Wireless charging:** the temperature limits haven't been seen to trigger on wireless, since the
   phone stayed under 38 °C. They use the same code as USB. Using OTG while on a wireless charger isn't
   handled. Stock's faster wireless charging needs drivers for the P9415 and HL7227 chips.
+- **Charging to full:** as stock, to 4.43 V per cell (8.86 V), stopping when the gauge reports full or
+  under 125 mA, and recharging 100 mV per cell lower. From full until unplugged the battery shows
+  "Full" at 100%, then falls to the gauge's value at 1% a minute, like Android's UI. Cell voltages
+  aren't read, so the limits use half the pack voltage, where stock uses the higher cell.
 - **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
   fired during that time, the phone stays awake with the screen off until it's next used, at about
   53 mA instead of about 40.

@@ -29,7 +29,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
-| Charging | ✅ | USB-C PD, about 25 W; stops near 95% by choice. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
+| Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and shows "Charged" until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
 | Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Works the same as USB otherwise; USB takes over if both are attached |
 | Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed |
 | Speakers and mics | ✅ | A limiter and high-pass filter guard the speakers; it's not stock's full speaker protection |
@@ -62,7 +62,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 140 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 142 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, and the modem services |
