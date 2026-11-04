@@ -17,7 +17,19 @@ MK=(make -C "$SRC" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$JOBS
 mkdir -p "$WORK" "$OUT"
 if [ ! -d "$SRC" ]; then
 	git clone --depth 1 --branch v7.3 "$KERNEL_GIT" "$SRC"
+fi
+
+# The series is applied once per set of patches. The marker is only written
+# after git am succeeds, so an interrupted or failed run is redone from v7.3
+# instead of silently building whatever was applied; a changed series is
+# reapplied the same way.
+WANT=$(cat "$HERE"/patches/*.patch | sha256sum | cut -d' ' -f1)
+if [ "$WANT" != "$(cat "$WORK/patches.sha256" 2>/dev/null || true)" ]; then
+	rm -f "$WORK/patches.sha256"
+	git -C "$SRC" am --abort 2>/dev/null || true
+	git -C "$SRC" reset -q --hard v7.3
 	git -C "$SRC" -c user.name=op9-build -c user.email=op9-build@localhost am -q "$HERE"/patches/*.patch
+	echo "$WANT" > "$WORK/patches.sha256"
 fi
 
 if [ -n "${WIFI_MAC:-}" ]; then
