@@ -1,21 +1,23 @@
-# Arch's modemmanager 1.24.2 plus two upstream fixes that stop it crashing on this
-# phone's multiplexed QMI data link: reconnecting mobile data crashed it (netlink
-# use-after-free), and so did stopping it with data connected (bearer count assert).
-# Our own patch makes GPS start: the LOC service wants a master client first.
-# pkgrel 2.x sits just above Arch's 1.24.2-2, so the next Arch release replaces this
-# package. The crash fixes are upstream, but the GPS patch isn't yet: rebuild this
-# PKGBUILD on the new version when that happens.
+# OnePlus 9 Pro build of Arch's modemmanager: 1.24.2 plus two upstream fixes that
+# stop it crashing on this phone's multiplexed QMI data link (reconnecting mobile
+# data crashed it with a netlink use-after-free, and so did stopping it with data
+# connected, a bearer count assert), and our own patch that makes GPS start: the
+# LOC service wants a master client first.
+# Like the other -op9 packages it replaces the stock modemmanager and libmm-glib and
+# pacman won't swap it back on updates. When Arch moves to a newer ModemManager, an
+# update that needs it stops with a dependency error: bump pkgver here, drop the
+# cherry-picks once they are in the release, and check the GPS patch still applies.
 # Based on https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Contributor: Ionut Biru <ibiru@archlinux.org>
 
-pkgbase=modemmanager
+pkgbase=modemmanager-op9
 pkgname=(
-  modemmanager
-  libmm-glib
+  modemmanager-op9
+  libmm-glib-op9
 )
 pkgver=1.24.2
-pkgrel=2.2
+pkgrel=1
 pkgdesc="Mobile broadband modem management service"
 url="https://www.freedesktop.org/wiki/Software/ModemManager/"
 arch=(aarch64)
@@ -100,10 +102,13 @@ _pick() {
   done
 }
 
-package_modemmanager() {
+package_modemmanager-op9() {
+  pkgdesc+=" (OnePlus 9 Pro patches)"
   license=(GPL-2.0-or-later)
+  provides=("modemmanager=$pkgver")
+  conflicts=(modemmanager)
   depends+=(
-    "libmm-glib=$pkgver-$pkgrel" libmm-glib.so
+    "libmm-glib-op9=$pkgver-$pkgrel" libmm-glib.so
     libgudev-1.0.so
     libg{lib,object,io,module}-2.0.so
     libmbim-glib.so
@@ -125,15 +130,16 @@ package_modemmanager() {
   _pick libmm usr/share/vala
 }
 
-package_libmm-glib() {
-  pkgdesc="ModemManager library"
+package_libmm-glib-op9() {
+  pkgdesc="ModemManager library (OnePlus 9 Pro build)"
   license=(LGPL-2.1-or-later)
   depends=(
     glib2 libg{lib,object,io}-2.0.so
     glibc
     libgcc
   )
-  provides=(libmm-glib.so)
+  provides=("libmm-glib=$pkgver" libmm-glib.so)
+  conflicts=(libmm-glib)
 
   mv libmm/* "$pkgdir"
 }

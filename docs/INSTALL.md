@@ -319,7 +319,10 @@ once as `alarm`, and `op9-no-splash --undo` to remove the copies.
 
 The modem needs three services that Arch Linux ARM doesn't package, and a ModemManager with two
 upstream crash fixes and a GPS fix: the modem only starts its GPS engine after the phone side
-registers as its "master client", which Android's location service does and ModemManager doesn't. Build them on the phone like the packages in step 8, `qrtr` first:
+registers as its "master client", which Android's location service does and ModemManager doesn't.
+That build is `modemmanager-op9` (with `libmm-glib-op9`), which replaces the stock packages the
+way the step 8 packages do, so a later Arch update can't put the unpatched ModemManager back
+without a dependency error. Build them on the phone like the packages in step 8, `qrtr` first:
 
 ```sh
 sudo pacman -S --needed vala gobject-introspection bash-completion
