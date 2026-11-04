@@ -13,13 +13,19 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 curl -fsSL -o "$WORK/busybox.tar.bz2" "https://busybox.net/downloads/busybox-$VERSION.tar.bz2"
 tar -xjf "$WORK/busybox.tar.bz2" -C "$WORK"
 cd "$WORK/busybox-$VERSION"
-make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-# Static, and no tc: its build breaks against current kernel headers and nothing here uses it
-sed -i -e 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' -e 's/^CONFIG_TC=y/# CONFIG_TC is not set/' .config
-make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig >/dev/null
+make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig >/dev/null
+# Static; no tc, whose build breaks against current kernel headers and which nothing here uses;
+# and no SHA hardware acceleration, which defconfig turns on but only exists for x86
+sed -i -e 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' -e 's/^CONFIG_TC=y/# CONFIG_TC is not set/' \
+	-e 's/^CONFIG_SHA1_HWACCEL=y/# CONFIG_SHA1_HWACCEL is not set/' \
+	-e 's/^CONFIG_SHA256_HWACCEL=y/# CONFIG_SHA256_HWACCEL is not set/' .config
+# BusyBox has no olddefconfig: take the defaults for anything the edits above uncovered
+make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- oldconfig < <(yes "") >/dev/null
 make -s ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" busybox >/dev/null
-for applet in telnetd udhcpd switch_root ip mknod; do
-	./busybox --list | grep -qx "$applet" || { echo "busybox: no $applet applet" >&2; exit 1; }
+# The build machine can't run an aarch64 binary, so check the config: the applets init uses,
+# and telnetd's standalone mode, which gives it -F and -b
+for opt in TELNETD FEATURE_TELNETD_STANDALONE UDHCPD SWITCH_ROOT IP MKNOD STATIC; do
+	grep -qx "CONFIG_$opt=y" .config || { echo "busybox: CONFIG_$opt is off" >&2; exit 1; }
 done
 install -m 755 busybox "$OUTPUT"
 ls -lh "$OUTPUT"
