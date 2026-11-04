@@ -346,9 +346,12 @@ screen's speaker and mute buttons work. Install the dialer and messaging apps an
 `alarm`:
 
 ```sh
-sudo pacman -S gnome-calls chatty
+sudo pacman -S gnome-calls chatty python-gobject
 systemctl --user enable --now op9-callaudio
 ```
+
+`op9-callaudio` is a Python program that talks to D-Bus through `python-gobject` and sets the
+mixer with `amixer` from `alsa-utils`, which step 7 installed.
 
 For picture messages, build `userspace/mmsd-tng` (it needs `c-ares`) and run
 `systemctl --user enable --now mmsd-tng` as `alarm`. On first run it writes
