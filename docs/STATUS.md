@@ -46,9 +46,14 @@ tested on earlier builds of the series and haven't been rerun since.
   and video decoder devices readable and writable by every user. Android 17 wasn't tried: no ARM64
   image exists, and others report its window never appears on Waydroid 1.6.3.
 - **Docks:** two USB-C DisplayPort docks (one a Dell) gave working USB 3, Ethernet, keyboard and
-  mouse, but no display: the DisplayPort output never reported a connection. A plain USB-C to HDMI
-  adapter works. `pmic_glink_altmode` can now log what the firmware reports; turn it on with
-  `options pmic_glink_altmode dyndbg=+p` in `/etc/modprobe.d/`.
+  mouse, but no display. With `pmic_glink_altmode` logging on, the charger firmware reported only
+  USB (SVID 0xff00) for the whole 18 minutes a dock was attached, never DisplayPort (0xff01). A
+  USB-C to HDMI adapter goes from USB to DisplayPort with HPD within 1.5 s. The difference is the
+  power role: the phone powers the adapter, so it is USB host and source from the start, while a
+  dock charges the phone, so the phone has to swap to host first. The firmware doesn't seem to
+  look for alternate modes after that swap. UCSI reports no alternate modes for either device, so
+  Linux can't request one. Turn the logging on with `options pmic_glink_altmode dyndbg=+p` in
+  `/etc/modprobe.d/`.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
 - **Boot:** `systemd-backlight` sometimes fails at startup.
 - **Driver unloading:** don't unload `qcom_iris` after a decoder hang, or `ath11k_pci` after a failed
