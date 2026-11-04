@@ -1,0 +1,15 @@
+[Unit]
+Description=This phone's Wi-Fi and Bluetooth addresses, from the modem
+# the modem boots with rmtfs; NetworkManager should only connect once the address is set
+Wants=rmtfs.service
+After=rmtfs.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/op9-addresses
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
