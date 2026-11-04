@@ -62,7 +62,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 142 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 143 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, and the modem services |

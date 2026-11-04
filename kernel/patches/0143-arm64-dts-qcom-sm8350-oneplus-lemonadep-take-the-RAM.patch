@@ -1,0 +1,100 @@
+From df288a558c444ceb37fd22af8937dc0101d82ebb Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 07:43:39 +0000
+Subject: [PATCH] arm64: dts: qcom: sm8350-oneplus-lemonadep: take the RAM
+ banks from the bootloader only
+
+The board file carried the three RAM banks of the 12 GB unit this was
+developed on, as a fallback for when ABL doesn't fill in /memory. The
+built-in DTB code copies ABL's banks over them, so on that unit the
+fallback was never used. On an 8 GB unit that hit it, the kernel would
+believe in 4 GB of RAM that isn't there and corrupt itself silently.
+
+Drop the banks: sm8350.dtsi already has the memory node with a zero size
+for the bootloader to fill. In op9_builtin_fdt(), require that ABL's DTB
+provides at least one bank of non-zero size, and panic with a message
+that names the cause otherwise, since nothing can run without RAM and
+a plain "no memory" failure later says nothing about why.
+
+Belongs in patch 0010 when the series is next folded.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ .../dts/qcom/sm8350-oneplus-lemonadep.dts     | 11 -------
+ arch/arm64/kernel/setup.c                     | 29 +++++++++++++++----
+ 2 files changed, 24 insertions(+), 16 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+index 4cfbe9086..ba7c93bb9 100644
+--- a/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8350-oneplus-lemonadep.dts
+@@ -24,17 +24,6 @@ / {
+ 	/* OnePlus ABL rejects DTBs without a matching project ("oplus dtsi not match"); 0x4d67 = 19815 */
+ 	oplus,dtsi_no = <0x4d67 0x2085a>;
+ 
+-	/*
+-	 * BRING-UP: RAM banks as the stock ABL reports them on this 12 GB unit
+-	 * (live /sys/firmware/fdt "memory" node), in case ABL does not fill in
+-	 * a "memory@80000000" node. 8 GB units differ.
+-	 */
+-	memory@80000000 {
+-		reg = <0x0 0x80000000 0x0 0x37500000>,
+-		      <0x2 0x00000000 0x1 0x80000000>,
+-		      <0x0 0xc0000000 0x1 0x40000000>;
+-	};
+-
+ 	/* Front camera analog supply: LDO fed from BOB, enabled by GPIO 97 */
+ 	vreg_cam_front_vana: regulator-cam-front-vana {
+ 		compatible = "regulator-fixed";
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index b307d0a37..298f417ab 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -181,6 +181,21 @@ static const char * const op9_chosen_props[] = {
+ 	"bootargs", "linux,initrd-start", "linux,initrd-end", "kaslr-seed", "rng-seed",
+ };
+ 
++/* At least one bank of non-zero size, with two address and two size cells */
++static bool __init op9_fdt_has_ram(const void *fdt, int node)
++{
++	const fdt32_t *reg;
++	int len, i;
++
++	reg = fdt_getprop(fdt, node, "reg", &len);
++	if (!reg)
++		return false;
++	for (i = 0; i + 4 <= len / (int)sizeof(*reg); i += 4)
++		if (fdt32_to_cpu(reg[i + 2]) || fdt32_to_cpu(reg[i + 3]))
++			return true;
++	return false;
++}
++
+ static void * __init op9_builtin_fdt(const void *boot)
+ {
+ 	int bc, oc, bm, om, len, i;
+@@ -201,13 +216,17 @@ static void * __init op9_builtin_fdt(const void *boot)
+ 		}
+ 	}
+ 
++	/*
++	 * The RAM banks come from the bootloader: the built-in DTB has none of
++	 * its own, so that an unexpected unit cannot run on another model's
++	 * layout. Without them there is nothing to boot with, so say so.
++	 */
+ 	bm = fdt_path_offset(boot, "/memory");
+ 	om = fdt_path_offset(op9_fdt, "/memory");
+-	if (bm >= 0 && om >= 0) {
+-		p = fdt_getprop(boot, bm, "reg", &len);
+-		if (p)
+-			fdt_setprop(op9_fdt, om, "reg", p, len);
+-	}
++	if (bm < 0 || om < 0 || !op9_fdt_has_ram(boot, bm))
++		panic("op9: the bootloader passed no RAM banks in /memory");
++	p = fdt_getprop(boot, bm, "reg", &len);
++	fdt_setprop(op9_fdt, om, "reg", p, len);
+ 
+ 	return op9_fdt;
+ }
+-- 
+2.43.0
+
