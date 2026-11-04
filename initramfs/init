@@ -56,8 +56,13 @@ max_leases 1
 option subnet 255.255.255.0
 EOC
 touch /var/lib/misc/udhcpd.leases
-udhcpd /etc/udhcpd.conf
-telnetd -l /bin/sh -b 172.16.42.1
+# Both stay in the foreground so their PIDs are known: they must not outlive
+# the initramfs, or the real system inherits a second DHCP server and a
+# listening telnetd whose shell can no longer start.
+udhcpd -f /etc/udhcpd.conf &
+UDHCPD_PID=$!
+telnetd -F -l /bin/sh -b 172.16.42.1 &
+TELNETD_PID=$!
 # Serial shell too, in case networking fails
 ( while true; do [ -e /dev/ttyGS0 ] && sh </dev/ttyGS0 >/dev/ttyGS0 2>&1; sleep 1; done ) &
 SERIAL_PID=$!
@@ -85,7 +90,7 @@ try_root() {
 	mount -t ext4 -o rw "$1" /sysroot || { echo "op9-initramfs: mount $1 failed"; return 1; }
 	if [ -e /sysroot/sbin/init ] || [ -L /sysroot/sbin/init ]; then
 		echo "op9-initramfs: switching to rootfs on $1"
-		kill "$SERIAL_PID" 2>/dev/null
+		kill "$SERIAL_PID" "$TELNETD_PID" "$UDHCPD_PID" 2>/dev/null
 		umount /sys/kernel/debug /sys/kernel/config /dev/pts 2>/dev/null
 		exec switch_root /sysroot /sbin/init
 	fi
