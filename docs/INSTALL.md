@@ -11,8 +11,8 @@
 
 - A OnePlus 9 Pro with an **unlocked bootloader**, running LineageOS with root, so you can copy firmware
 - The stock firmware level this was tested on: the bootloader from OxygenOS 13.1.0.593, as used by LineageOS 24
-- A Linux PC with `aarch64-linux-gnu-gcc`, `fastboot`, `mkbootimg`, `unpack_bootimg`, `cpio`, `dtc` and the usual kernel build tools
-- A static aarch64 `busybox` that includes the `telnetd` and `udhcpd` applets. Alpine's `busybox-static` doesn't have them.
+- A Linux PC with `fastboot`, `mkbootimg` and `unpack_bootimg`. To build the kernel yourself instead
+  of using a release, also `aarch64-linux-gnu-gcc`, `cpio`, `dtc`, `curl` and the usual kernel build tools
 
 ## 1. Back up your phone
 
@@ -30,44 +30,48 @@ Android is about to be wiped, so copy these now, as root:
 | `/vendor/firmware_mnt/image/` | DSP, modem and Wi-Fi firmware |
 | `/odm/etc/wifi/bdwlan.elf`, `/odm/etc/wifi/regdb.bin` | Wi-Fi board data and regulatory database |
 | `/mnt/vendor/persist/sensors/registry/registry/` | **Your phone's** sensor calibration |
-| `/mnt/vendor/persist/wlan_mac.bin` | **Your phone's** Wi-Fi address |
 
-Don't share the last two or post them publicly. Also keep `vendor_boot.img` from your LineageOS build.
+Don't share it or post it publicly. Also keep `vendor_boot.img` from your LineageOS build.
 
-Write down your **Bluetooth address** too. Android shows it under Settings → About phone. The chip
-has no address of its own: stock reads it from the modem's storage over QMI at boot, and this port
-sets it in the device tree when the kernel is built instead. On the one
-phone tested, it was the Wi-Fi address minus 1, but that's a single example, so don't rely on it.
+You don't need to note down the Wi-Fi or Bluetooth address: the chip has no addresses of its own,
+and `op9-addresses.service` reads both from the modem at boot, as stock does, so one kernel serves
+every phone.
 
-## 3. Build the kernel
+## 3. Get the kernel
 
-`wlan_mac.bin` contains a line like `Intf0MacAddress=AABBCCDDEEFF`. Pass that address, in lowercase
-pairs, so your phone uses its own. If you skip this, you get the firmware's placeholder address,
-which every phone without this setting shares.
+Each [release](https://github.com/LuCiLuna/oneplus9pro-arch/releases) has the kernel `Image`, a
+`modules-*.tar.zst` tarball, the `initramfs.gz` and the two scripts that pack a boot image, built
+by CI from the tagged kernel config and patches. Download those and go on to step 4.
 
-Do the same with your Bluetooth address, in the order Android shows it. Without it, BlueZ sees no
-Bluetooth adapter at all.
+To build it yourself instead:
 
 ```sh
-WIFI_MAC="aa bb cc dd ee ff" BT_ADDR="aa bb cc dd ee ff" kernel/build.sh work
+kernel/build.sh work
+initramfs/busybox.sh work/busybox
+initramfs/build.sh work/busybox work/initramfs.gz
 ```
 
-This produces `work/build/arch/arm64/boot/Image` and modules in `work/modroot`.
+This produces `work/build/arch/arm64/boot/Image`, modules in `work/modroot` and the initramfs.
+`initramfs/busybox.sh` builds the static busybox the initramfs needs; distribution builds often
+lack its `telnetd` and `udhcpd` applets (Alpine's `busybox-static`, for one). The build has no
+addresses in it. `WIFI_MAC="aa bb cc dd ee ff" BT_ADDR="aa bb cc dd ee ff" kernel/build.sh work`
+bakes a phone's own into the device tree instead, which is no longer needed.
 
 ## 4. Build the boot image
 
-The bootloader rejects any image without the stock device trees attached, so take them from `vendor_boot.img`:
+The bootloader rejects any image without the stock device trees attached. They're OnePlus's, so
+releases don't carry them: the script takes them from your `vendor_boot.img`.
 
 ```sh
-unpack_bootimg --boot_img vendor_boot.img --out vb
-initramfs/build.sh /path/to/static/busybox work/initramfs.gz
-scripts/mkboot.sh work/build/arch/arm64/boot/Image vb/dtb work/initramfs.gz work/op9-boot.img
+scripts/op9-boot-image.sh vendor_boot.img Image initramfs.gz op9-boot.img
 ```
+
+With a kernel you built, use `work/build/arch/arm64/boot/Image` and `work/initramfs.gz`.
 
 ### Test it before flashing
 
 ```sh
-fastboot boot work/op9-boot.img
+fastboot boot op9-boot.img
 ```
 
 This changes nothing on the phone. Send the command **once**. The bootloader takes a few seconds
@@ -92,7 +96,8 @@ mkfs.ext4 -L op9root root.img
 sudo mount root.img /mnt/op9
 sudo bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C /mnt/op9
 sudo cp -a rootfs/. /mnt/op9/
-sudo cp -a work/modroot/lib/modules /mnt/op9/usr/lib/
+sudo tar -C /mnt/op9/usr -xf modules-*.tar.zst     # from a release
+sudo cp -a work/modroot/lib/modules /mnt/op9/usr/lib/   # or from your own build
 ```
 
 ### Firmware
@@ -139,7 +144,7 @@ sudo umount /mnt/op9
 img2simg root.img root.simg
 adb reboot bootloader
 fastboot flash userdata root.simg     # ERASES ALL ANDROID DATA
-fastboot flash boot_a work/op9-boot.img
+fastboot flash boot_a op9-boot.img
 fastboot set_active a
 fastboot reboot
 ```
@@ -169,9 +174,14 @@ pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gn
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
     libnotify swh-plugins
-systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful
+systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses
 systemctl set-default graphical.target
 ```
+
+`op9-addresses` gives Wi-Fi and Bluetooth the phone's own addresses, read from the modem with
+`qmicli` once `rmtfs` has started it. That's step 13, so until the modem services are installed,
+Wi-Fi runs with the firmware's placeholder address, which every phone shares, and Bluetooth has
+no adapter.
 
 `tools/` has source for `touchboost`, `op9-slot` and `alert-slider`, which those services run.
 Cross-compile them statically and put them in `/usr/local/bin`:

@@ -58,8 +58,10 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
   re-enumeration, so the PHY datapath has to be reclaimed.
 - **OTG:** the charger firmware keeps Type-C sink-only until the AP sets the OnePlus-specific properties.
 - **Bluetooth address:** the chip has none, so the kernel leaves the controller unconfigured and BlueZ
-  sees nothing. Set it with `local-bd-address`, or try it live with `btmgmt --index 0 public-addr`.
-  Stock reads it from the modem's storage over QMI.
+  sees nothing. `btmgmt --index 0 public-addr` configures it at runtime. Stock reads it from the
+  modem over QMI, and so does `op9-addresses`: `qmicli -p -d qrtr://0 --dms-get-mac-address=bt`
+  (and `=wlan` for Wi-Fi) returns the addresses byte-reversed, about 6 s into boot after `rmtfs`,
+  without ModemManager.
 - **Modem bring-up:** the kernel side was complete; the modem only needed `rmtfs`, `tqftpserv` and
   ModemManager in userspace. Three things stock's radio layer does that nothing on Linux did:
   open the SIM's provisioning session (without it ModemManager reports "GW primary session index

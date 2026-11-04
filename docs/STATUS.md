@@ -82,10 +82,12 @@ tested on earlier builds of the series and haven't been rerun since.
   call stays inside the audio DSP and never reaches PipeWire, so HFP can't carry it without a DSP
   Bluetooth port or a loopback through a host PCM. `op9-callaudio` also expects the phone's sound
   card at index 0, which a USB audio device or an HDMI adapter can shift.
-- **Bluetooth address:** it's substituted into the device tree at build time, so every phone needs
-  its own kernel build. Now that the modem runs, it could be read from modem storage over QMI at
-  boot, the way stock does, which together with a runtime Wi-Fi address would let one kernel serve
-  every phone.
+- **Addresses:** `op9-addresses` reads the Wi-Fi and Bluetooth addresses from the modem at boot
+  (`qmicli --dms-get-mac-address`, which answers about 6 s into boot once `rmtfs` has started the
+  modem), so one kernel serves every phone. Without the modem services, Wi-Fi has the firmware's
+  placeholder address and Bluetooth no adapter. The stock DTB blob the bootloader insists on is
+  OnePlus's, so releases ship Image, modules and initramfs, and the boot image is packed on the
+  user's PC from their own `vendor_boot.img`.
 - **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
   bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
 
@@ -105,8 +107,8 @@ been attempted on Linux.
    cutting touch power
 2. Call audio through wired headsets, then Bluetooth
 3. Assisted GPS for faster fixes, and real accuracy figures through geoclue
-4. Set the Wi-Fi and Bluetooth addresses at boot instead of at build time, towards one kernel and
-   a prebuilt image for every phone
+4. A prebuilt root filesystem tarball in the releases, now that one kernel serves every phone,
+   and the install replayed from scratch with it
 5. Get a display from USB-C docks
 6. Test an analog USB-C headset and a Bluetooth headset's microphone
 7. Improve camera quality and check video recording

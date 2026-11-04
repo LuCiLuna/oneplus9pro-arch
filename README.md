@@ -5,8 +5,9 @@
 Native Arch Linux ARM on the OnePlus 9 Pro (`lemonadep`, Snapdragon 888 / SM8350) with a
 mainline Linux 7.3 kernel, the Phosh phone interface and no Android underneath.
 
-This runs on one real phone. It isn't a polished distribution yet: there's no
-installer or prebuilt image, and installing it means building a kernel and wiping the phone.
+This runs on one real phone. It isn't a polished distribution yet: releases carry a kernel that
+runs on every phone, but there's no installer or prebuilt root filesystem, and installing means
+wiping the phone.
 
 ## ⚠️ Read this first
 
@@ -26,7 +27,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Display | ✅ | 1440x3216 and 1080x2412 at up to 120 Hz |
 | Touch | ✅ | 10 points |
 | GPU | ✅ | OpenGL 4.6, ES 3.2, Vulkan 1.3 |
-| Wi-Fi | ✅ | Up to 6 GHz, 160 MHz |
+| Wi-Fi | ✅ | Up to 6 GHz, 160 MHz; the phone's own address is read from the modem at boot |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
 | Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and reports the battery full until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
@@ -37,7 +38,7 @@ installer or prebuilt image, and installing it means building a kernel and wipin
 | Sensors | ✅ | Accelerometer, light, proximity, compass, auto-rotate |
 | Video decoding | ✅ | H.264 and VP9 in hardware up to 4K60, including Firefox (no AV1 hardware on this chip) |
 | Memory and CPU scaling | ✅ | DDR, LLCC and L3 scale with load; the scheduler knows which cores are fast |
-| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; Bluetooth LE scanning works; each phone sets its own address when building the kernel |
+| Bluetooth | ✅ | Pairing and music tested with a headset, headset mic untested; Bluetooth LE scanning works; the phone's own address is read from the modem at boot |
 | Buttons | ✅ | Power, volume up and volume down |
 | Alert slider | ✅ | Top silent, middle vibrate, bottom ring |
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
@@ -67,16 +68,20 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, and the modem services |
 | [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding, and its settings |
+| [`scripts/`](scripts) | Packing a boot image from a release and your phone's `vendor_boot.img`, and USB internet sharing |
 | [`tools/`](tools) | Source for helper tools |
 | [`docs/`](docs) | [Install guide](docs/INSTALL.md), [status](docs/STATUS.md) and [hardware notes](docs/HARDWARE.md) |
 
-**Firmware isn't included.** It's proprietary, so you copy it from your own phone. Sensor
-calibration and the Wi-Fi and Bluetooth addresses are specific to each phone, so those come from your phone too.
+**Firmware isn't included.** It's proprietary, so you copy it from your own phone, and so is the
+stock device tree blob the bootloader insists on, which the boot image script takes from your
+`vendor_boot.img`. Sensor calibration is specific to each phone, so it comes from your phone too.
+The Wi-Fi and Bluetooth addresses are read from the modem at boot.
 
 ## Getting started
 
-Follow [docs/INSTALL.md](docs/INSTALL.md). You'll need a Linux PC, an unlocked bootloader, an
-`aarch64-linux-gnu` cross compiler and experience recovering a phone from fastboot.
+Follow [docs/INSTALL.md](docs/INSTALL.md). You'll need a Linux PC, an unlocked bootloader and
+experience recovering a phone from fastboot, plus an `aarch64-linux-gnu` cross compiler if you
+build the kernel yourself rather than taking it from a [release](https://github.com/LuCiLuna/oneplus9pro-arch/releases).
 
 ## Contributing
 
