@@ -62,6 +62,16 @@ tested on earlier builds of the series and haven't been rerun since.
   Linux can't request one. Turn the logging on with `options pmic_glink_altmode dyndbg=+p` in
   `/etc/modprobe.d/`.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
+  A second one on 2026-11-05 started when the GPU woke to dim the screen: the GMU stopped answering
+  (`Timeout waiting for GMU OOB set GPU_SET`), the GPU faulted, and after the reset Phosh no longer
+  answered the power key and the phone never suspended. It then drew about three times its awake idle
+  current, screen off, for three hours until it was reset by hand. The cause isn't known. The
+  kernel now reports hung tasks (3 minutes in D state), soft lockups and workqueue stalls, and
+  `op9-lockup-watch` reboots after the report has reached the journal, with an immediate reset
+  if shutdown hangs on the stuck task. Every reset on this phone clears RAM, so ramoops can't
+  keep a panic log. Kernel panics (`rootfs/etc/sysctl.d/90-op9-lockup.conf`) are only the fallback
+  for when userspace can't run. GPU crash dumps are saved to `/var/lib/op9-devcoredump`. Don't
+  set `/sys/kernel/reboot/mode` to `warm`: that reboot hung twice in firmware.
 - **Boot:** `systemd-backlight` sometimes fails at startup.
 - **Driver unloading:** don't unload `qcom_iris` after a decoder hang, or `ath11k_pci` after a failed
   crash recovery. Either can hang shutdown, so reboot instead.

@@ -1,0 +1,3 @@
+# Device crash dumps (GPU hangs, firmware crashes) live in memory for 5 minutes and are
+# gone after a reboot. Save each one to /var/lib/op9-devcoredump.
+ACTION=="add", SUBSYSTEM=="devcoredump", TAG+="systemd", ENV{SYSTEMD_WANTS}+="op9-devcoredump@%k.service"

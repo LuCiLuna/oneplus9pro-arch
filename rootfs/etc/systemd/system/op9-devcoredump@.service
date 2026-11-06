@@ -1,0 +1,8 @@
+[Unit]
+Description=Save device crash dump %i
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/op9-devcoredump %i

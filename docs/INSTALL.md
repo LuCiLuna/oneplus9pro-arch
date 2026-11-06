@@ -174,7 +174,7 @@ pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gn
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
     libnotify swh-plugins
-systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses
+systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses systemd-pstore op9-lockup-watch
 systemctl set-default graphical.target
 ```
 

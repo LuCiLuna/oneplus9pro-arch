@@ -1,0 +1,16 @@
+#!/bin/sh
+# op9-devcoredump devcdN: save /sys/class/devcoredump/devcdN to
+# /var/lib/op9-devcoredump/<time>-<driver>-<device>.dump.gz, free it, keep the newest 10.
+set -eu
+d=${OP9_DEVCD_SYS:-/sys/class/devcoredump}/$1
+out=${OP9_DEVCD_DIR:-/var/lib/op9-devcoredump}
+[ -e "$d/data" ] || exit 0
+dev=$(basename "$(readlink -f "$d/failing_device" 2>/dev/null || echo unknown)")
+drv=$(basename "$(readlink -f "$d/failing_device/driver" 2>/dev/null || echo unknown)")
+mkdir -p "$out"
+f="$out/$(date +%Y%m%d-%H%M%S)-$drv-$dev.dump.gz"
+gzip -c "$d/data" > "$f.tmp"
+mv "$f.tmp" "$f"
+echo 1 > "$d/data" 2>/dev/null || true
+ls -1t "$out"/*.dump.gz | tail -n +11 | xargs -r rm -f
+echo "saved crash dump from $drv $dev to $f ($(stat -c %s "$f") bytes)"

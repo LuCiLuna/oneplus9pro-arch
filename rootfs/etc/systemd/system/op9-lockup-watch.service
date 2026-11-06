@@ -1,0 +1,11 @@
+[Unit]
+Description=Reboot with the log saved when the kernel reports a lockup
+
+[Service]
+ExecStart=/usr/local/bin/op9-lockup-watch
+# Keep running while the system shuts down, so the reset fallback still fires.
+KillMode=process
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

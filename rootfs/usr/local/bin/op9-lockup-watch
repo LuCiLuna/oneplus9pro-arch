@@ -1,0 +1,43 @@
+#!/usr/bin/python3 -I
+# Reboot cleanly when the kernel reports a hung task, soft lockup or workqueue stall.
+#
+# A kernel panic would reboot too, but on this phone every reset clears RAM, so ramoops
+# keeps nothing, and the panic happens before journald stores the report. Here the
+# report is given time to reach the journal, the journal is synced, and only then does
+# the phone reboot. Kernel panics stay as the fallback for when this can't run
+# (see /etc/sysctl.d/90-op9-lockup.conf).
+import os, subprocess, sys, time
+
+PATTERNS = (b"blocked for more than", b"soft lockup - CPU#", b"BUG: workqueue lockup")
+STATE = "/var/lib/op9-lockup"
+SETTLE = 15        # seconds for the stack dumps to reach the journal
+FORCE_AFTER = 90   # seconds before an immediate reset if the clean reboot hangs
+
+fd = os.open("/dev/kmsg", os.O_RDONLY)
+os.lseek(fd, 0, os.SEEK_END)    # only messages from now on
+while True:
+    try:
+        rec = os.read(fd, 8192)
+    except BrokenPipeError:     # records overwritten before we read them
+        continue
+    msg = rec.split(b";", 1)[-1].split(b"\n", 1)[0]
+    if any(p in msg for p in PATTERNS):
+        break
+
+text = msg.decode(errors="replace")
+print(f"kernel reported: {text}; rebooting in {SETTLE} s", flush=True)
+os.makedirs(STATE, exist_ok=True)
+with open(f"{STATE}/last", "w") as f:
+    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+time.sleep(SETTLE)
+subprocess.run(["journalctl", "--sync"], timeout=20)
+os.sync()
+if os.fork() == 0:
+    # A task stuck in a driver can stall shutdown forever: reset if it does.
+    time.sleep(FORCE_AFTER)
+    os.sync()
+    with open("/proc/sysrq-trigger", "w") as f:
+        f.write("b")
+    sys.exit(0)
+subprocess.run(["systemctl", "reboot"])
+time.sleep(FORCE_AFTER + 10)
