@@ -469,6 +469,54 @@ heaviest part: its Chromium-based interface, emulated, runs for minutes on sever
 Steam's window leaves it running in the background, since Phosh has no tray to show it: quit it
 with Steam → Exit. Most games need a controller, or a keyboard and mouse.
 
+## 15. Everyday apps and codecs (optional)
+
+These GNOME apps resize to the phone screen, so the same ones work in Phosh and in desktop mode:
+
+```sh
+sudo pacman -S --needed gnome-calculator iotas gnome-clocks gnome-contacts gnome-calendar \
+    gnome-weather gnome-maps loupe showtime decibels gnome-text-editor file-roller resources
+```
+
+That's a calculator, notes (Iotas, Markdown, optional Nextcloud sync), alarms and timers,
+contacts, calendar, weather, maps, image and video viewers, an audio file player, a text editor,
+an archive manager and a system monitor. Weather and Maps find you through Location Services in
+Settings. Clock alarms haven't been tested with the phone asleep.
+
+Music and video in AAC (most `.m4a` files) and a few older formats need GStreamer's FFmpeg and
+"ugly" plugins. Without them those files don't play:
+
+```sh
+sudo pacman -S --needed gst-libav gst-plugins-ugly
+```
+
+For desktop mode, an office suite and the usual GNOME desktop tools. LibreOffice is big and
+cramped on the phone screen:
+
+```sh
+sudo pacman -S --needed libreoffice-fresh gnome-tweaks extension-manager gnome-shell-extensions \
+    baobab gnome-disk-utility
+```
+
+For anything else, add Software with Flathub, which has Arm builds of most Linux apps:
+
+```sh
+sudo pacman -S --needed gnome-software flatpak
+sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
+**Reboot after installing Flatpak for the first time.** Flatpak adds its app folders to the
+session at login, so until then its apps are missing from the app grid. Restarting Phosh alone
+shows them, but most won't open: they start through the session's D-Bus, which also only learns
+about Flatpak at login.
+
+Decibels plays one file at a time. For a music library, Gapless finds the music in `~/Music` by
+itself and fits the phone screen; it's on Flathub, with AAC support of its own:
+
+```sh
+flatpak install flathub com.github.neithern.g4music
+```
+
 ## How this phone got here
 
 The phone first ran Linux from a `linux` logical partition inside `super`, was built up over USB,
