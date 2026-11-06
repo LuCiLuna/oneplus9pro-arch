@@ -111,8 +111,15 @@ tested on earlier builds of the series and haven't been rerun since.
 
 Plugging in a display (tested with a USB-C to HDMI adapter and a Samsung TV) opens a chooser on the
 phone. Start desktop stops Phosh and its apps and runs a full GNOME session on the external
-display, with the phone panel off and its touchscreen ignored. Unplugging, or no display showing
-up within 20 s, brings Phosh back. The choice can be remembered.
+display. Unplugging, or no display showing up within 20 s, brings Phosh back. The choice can be
+remembered.
+
+The phone screen can be a tenkeyless keyboard with a trackpad below it, a keyboard, a trackpad, or
+off, held in landscape with its top to the left. Automatic picks one from the USB and Bluetooth
+keyboards and mice attached (a mouse's extra "keyboard" interface doesn't count).
+`op9-desktop-input` grabs the touchscreen and feeds a virtual multi-touch touchpad, so libinput
+gives it tap-to-click, two-finger scrolling and gestures, and a virtual keyboard where each finger
+holds its key. The panel stays dark for now: the keys aren't drawn yet.
 
 - `op9-desktop` is both the chooser under Phosh and the helper under GNOME. It writes GNOME's
   `monitors.xml` from the display's EDID before starting, so GNOME never opens on the phone first.
@@ -121,7 +128,8 @@ up within 20 s, brings Phosh back. The choice can be remembered.
 - Patch 0144 keeps DP off the mixers and CTL the panel needs. Without it, the panel came back on
   other blocks after desktop mode and never drew a frame until a reboot.
 - GNOME scans out linear buffers: 10-bit UBWC-compressed ones showed black on DP.
-- Not done yet: the phone screen as a keyboard and trackpad, docks (see Known problems) and MST.
+- Not done yet: drawing the keyboard and trackpad on the panel, key vibration, docks (see Known
+  problems) and MST.
 
 ## Fingerprint reader
 

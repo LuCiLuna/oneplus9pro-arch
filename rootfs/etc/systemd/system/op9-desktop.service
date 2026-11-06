@@ -3,7 +3,7 @@
 [Unit]
 Description=GNOME desktop mode
 After=systemd-user-sessions.service
-Wants=dbus.socket systemd-logind.service
+Wants=dbus.socket systemd-logind.service op9-desktop-input.service
 Conflicts=getty@tty7.service phosh.service
 After=getty@tty7.service phosh.service
 

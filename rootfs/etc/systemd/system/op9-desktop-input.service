@@ -1,0 +1,11 @@
+# Desktop mode: the phone's touchscreen as a keyboard and/or trackpad (root for /dev/uinput).
+# Runs while op9-desktop.service does; the mode comes from the desktop user's config.
+[Unit]
+Description=Desktop mode phone screen input
+BindsTo=op9-desktop.service
+After=op9-desktop.service
+
+[Service]
+ExecStart=/usr/local/bin/op9-desktop-input --uid 1000
+Restart=on-failure
+RestartSec=1

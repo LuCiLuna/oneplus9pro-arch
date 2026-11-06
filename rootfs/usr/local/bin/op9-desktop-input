@@ -1,0 +1,418 @@
+#!/usr/bin/python3 -I
+# Desktop mode: the phone's touchscreen as a keyboard and/or trackpad for GNOME.
+#
+# Grabs the touchscreen, so GNOME never sees it, and feeds two virtual devices instead:
+# "op9 trackpad", a real multi-touch touchpad (libinput gives it tap-to-click, two-finger
+# scrolling and gestures), and "op9 keyboard". Runs as root for /dev/uinput, bound to
+# op9-desktop.service. The phone is held in landscape.
+#
+# Modes, from the desktop-mode config (~/.config/op9-desktop/config.json, "mode"):
+#   keyboard-trackpad  TKL keyboard on top, trackpad below
+#   keyboard           the whole screen is a keyboard (a mouse is connected)
+#   trackpad           the whole screen is a trackpad (a keyboard is connected)
+#   off                touches are ignored
+#   auto               one of the above from the USB and Bluetooth keyboards and mice attached
+import fcntl
+import glob
+import json
+import os
+import pwd
+import select
+import signal
+import struct
+import sys
+import time
+
+EV_SYN, EV_KEY, EV_REL, EV_ABS = 0, 1, 2, 3
+SYN_REPORT = 0
+ABS_X, ABS_Y = 0x00, 0x01
+ABS_MT_SLOT, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID = 0x2F, 0x35, 0x36, 0x39
+REL_X, REL_Y = 0, 1
+BTN_LEFT, BTN_TOOL_FINGER, BTN_TOOL_QUINTTAP, BTN_TOUCH = 0x110, 0x145, 0x148, 0x14A
+BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP, BTN_TOOL_QUADTAP = 0x14D, 0x14E, 0x14F
+INPUT_PROP_POINTER, INPUT_PROP_DIRECT = 0, 1
+BUS_USB, BUS_BLUETOOTH, BUS_VIRTUAL = 0x03, 0x05, 0x06
+
+EVIOCGRAB = 0x40044590
+UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_ABSBIT, UI_SET_PROPBIT = 0x40045564, 0x40045565, 0x40045567, 0x4004556E
+UI_DEV_SETUP, UI_ABS_SETUP, UI_DEV_CREATE = 0x405C5503, 0x401C5504, 0x5501
+
+EVENT = struct.Struct("llHHi")
+# The panel is 71 x 159 mm; the touchscreen reports in panel pixels.
+PANEL_MM = (71.0, 159.0)
+MODES = ("keyboard-trackpad", "keyboard", "trackpad", "off")
+
+
+def log(*a):
+    print("op9-desktop-input:", *a, flush=True)
+
+
+def eviocgabs(fd, code):
+    buf = bytearray(24)
+    fcntl.ioctl(fd, 0x80184540 + code, buf)
+    return struct.unpack("6i", buf)  # value, min, max, fuzz, flat, resolution
+
+
+# ---------------------------------------------------------------- layouts
+# Key codes from linux/input-event-codes.h
+K = dict(ESC=1, MINUS=12, EQUAL=13, BACKSPACE=14, TAB=15, LEFTBRACE=26, RIGHTBRACE=27,
+         ENTER=28, LEFTCTRL=29, SEMICOLON=39, APOSTROPHE=40, GRAVE=41, LEFTSHIFT=42,
+         BACKSLASH=43, COMMA=51, DOT=52, SLASH=53, RIGHTSHIFT=54, LEFTALT=56, SPACE=57,
+         CAPSLOCK=58, SCROLLLOCK=70, F11=87, F12=88, RIGHTCTRL=97, SYSRQ=99, RIGHTALT=100,
+         HOME=102, UP=103, PAGEUP=104, LEFT=105, RIGHT=106, END=107, DOWN=108, PAGEDOWN=109,
+         INSERT=110, DELETE=111, PAUSE=119, LEFTMETA=125, RIGHTMETA=126, COMPOSE=127)
+for i, c in enumerate("1234567890"):
+    K[c] = 2 + i
+for row, first in (("QWERTYUIOP", 16), ("ASDFGHJKL", 30), ("ZXCVBNM", 44)):
+    for i, c in enumerate(row):
+        K[c] = first + i
+for i in range(10):
+    K[f"F{i + 1}"] = 59 + i
+
+
+def keys(labels):
+    return [(l, K[l], 1) for l in labels]
+
+
+GAP = None
+# Standard ANSI tenkeyless: 18.25 units wide, the function row set off by a quarter unit.
+TKL = [
+    [("Esc", K["ESC"], 1), (GAP, 1)] + keys(["F1", "F2", "F3", "F4"]) + [(GAP, .5)]
+    + keys(["F5", "F6", "F7", "F8"]) + [(GAP, .5)] + keys(["F9", "F10", "F11", "F12"])
+    + [(GAP, .25), ("PrtSc", K["SYSRQ"], 1), ("ScrLk", K["SCROLLLOCK"], 1), ("Pause", K["PAUSE"], 1)],
+    [("`", K["GRAVE"], 1)] + keys("1234567890") + [("-", K["MINUS"], 1), ("=", K["EQUAL"], 1),
+     ("Backspace", K["BACKSPACE"], 2), (GAP, .25), ("Ins", K["INSERT"], 1), ("Home", K["HOME"], 1),
+     ("PgUp", K["PAGEUP"], 1)],
+    [("Tab", K["TAB"], 1.5)] + keys("QWERTYUIOP") + [("[", K["LEFTBRACE"], 1), ("]", K["RIGHTBRACE"], 1),
+     ("\\", K["BACKSLASH"], 1.5), (GAP, .25), ("Del", K["DELETE"], 1), ("End", K["END"], 1),
+     ("PgDn", K["PAGEDOWN"], 1)],
+    [("Caps", K["CAPSLOCK"], 1.75)] + keys("ASDFGHJKL") + [(";", K["SEMICOLON"], 1),
+     ("'", K["APOSTROPHE"], 1), ("Enter", K["ENTER"], 2.25)],
+    [("Shift", K["LEFTSHIFT"], 2.25)] + keys("ZXCVBNM") + [(",", K["COMMA"], 1), (".", K["DOT"], 1),
+     ("/", K["SLASH"], 1), ("Shift", K["RIGHTSHIFT"], 2.75), (GAP, 1.25), ("Up", K["UP"], 1)],
+    [("Ctrl", K["LEFTCTRL"], 1.25), ("Super", K["LEFTMETA"], 1.25), ("Alt", K["LEFTALT"], 1.25),
+     ("Space", K["SPACE"], 6.25), ("AltGr", K["RIGHTALT"], 1.25), ("Super", K["RIGHTMETA"], 1.25),
+     ("Menu", K["COMPOSE"], 1.25), ("Ctrl", K["RIGHTCTRL"], 1.25), (GAP, .25), ("Left", K["LEFT"], 1),
+     ("Down", K["DOWN"], 1), ("Right", K["RIGHT"], 1)],
+]
+TKL_UNITS = (18.25, 6.25)
+
+
+class Region:
+    def __init__(self, kind, x, y, w, h, code=None, label=None):
+        self.kind, self.x, self.y, self.w, self.h = kind, x, y, w, h
+        self.code, self.label = code, label
+
+    def hit(self, px, py):
+        return self.x <= px < self.x + self.w and self.y <= py < self.y + self.h
+
+
+def keyboard_regions(x0, y0, w, h):
+    ux, uy = w / TKL_UNITS[0], h / TKL_UNITS[1]
+    out = []
+    y = y0
+    for r, row in enumerate(TKL):
+        x = x0
+        for item in row:
+            if item[0] is GAP:
+                x += item[1] * ux
+                continue
+            label, code, units = item
+            out.append(Region("key", x, y, units * ux, uy, code, label))
+            x += units * ux
+        y += uy * (1.25 if r == 0 else 1)
+    return out
+
+
+def layout(mode, W, H):
+    """Regions for a mode, in landscape pixels (W x H)."""
+    if mode == "keyboard":
+        return keyboard_regions(0, 0, W, H)
+    if mode == "trackpad":
+        return [Region("pad", 0, 0, W, H)]
+    if mode == "keyboard-trackpad":
+        kh = round(H * 0.62)
+        gap = round(H * 0.03)
+        return keyboard_regions(0, 0, W, kh) + [Region("pad", 0, kh + gap, W, H - kh - gap)]
+    return []
+
+
+# ---------------------------------------------------------------- uinput
+class UInput:
+    def __init__(self, name, product, keys=(), absinfo=None, props=()):
+        self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        if keys:
+            fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
+            for k in keys:
+                fcntl.ioctl(self.fd, UI_SET_KEYBIT, k)
+        if absinfo:
+            fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_ABS)
+            for code, (lo, hi, res) in absinfo.items():
+                fcntl.ioctl(self.fd, UI_SET_ABSBIT, code)
+                fcntl.ioctl(self.fd, UI_ABS_SETUP, struct.pack("Hxxiiiiii", code, 0, lo, hi, 0, 0, res))
+        for p in props:
+            fcntl.ioctl(self.fd, UI_SET_PROPBIT, p)
+        fcntl.ioctl(self.fd, UI_DEV_SETUP,
+                    struct.pack("HHHH80sI", BUS_VIRTUAL, 0x0001, product, 1, name.encode(), 0))
+        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+
+    def emit(self, events):
+        if events:
+            data = b"".join(EVENT.pack(0, 0, t, c, v) for t, c, v in events)
+            os.write(self.fd, data + EVENT.pack(0, 0, EV_SYN, SYN_REPORT, 0))
+
+    def close(self):
+        os.close(self.fd)
+
+
+# ---------------------------------------------------------------- devices
+def bits(path):
+    try:
+        with open(path) as f:
+            words = f.read().split()
+    except OSError:
+        return 0
+    v = 0
+    for w in words:
+        v = (v << 64) | int(w, 16)
+    return v
+
+
+def has(v, *codes):
+    return all((v >> c) & 1 for c in codes)
+
+
+def find_touchscreen():
+    for ev in sorted(glob.glob("/sys/class/input/event*")):
+        d = ev + "/device"
+        if has(bits(d + "/properties"), INPUT_PROP_DIRECT) and \
+           has(bits(d + "/capabilities/abs"), ABS_MT_POSITION_X, ABS_MT_POSITION_Y):
+            return "/dev/input/" + os.path.basename(ev)
+    return None
+
+
+def attached_keyboard_mouse():
+    """(keyboard, mouse) attached over USB or Bluetooth. A mouse's extra "keyboard"
+    interface (gaming mice have one, with every key) doesn't count as a keyboard."""
+    groups = {}
+    for ev in glob.glob("/sys/class/input/event*"):
+        d = ev + "/device"
+        try:
+            with open(d + "/id/bustype") as f:
+                bus = int(f.read(), 16)
+        except OSError:
+            continue
+        if bus not in (BUS_USB, BUS_BLUETOOTH):
+            continue
+        k, r, a = bits(d + "/capabilities/key"), bits(d + "/capabilities/rel"), bits(d + "/capabilities/abs")
+        kbd = has(k, K["A"], K["Z"], K["SPACE"], K["ENTER"])
+        mouse = (has(r, REL_X, REL_Y) and has(k, BTN_LEFT)) or \
+                (has(a, ABS_X, ABS_Y) and has(k, BTN_TOOL_FINGER) and not has(bits(d + "/properties"), INPUT_PROP_DIRECT))
+        g = groups.setdefault(os.path.realpath(d + "/device"), [False, False])
+        g[0] |= kbd
+        g[1] |= mouse
+    keyboard = any(kb and not m for kb, m in groups.values())
+    mouse = any(m for kb, m in groups.values())
+    return keyboard, mouse
+
+
+def resolve(mode):
+    if mode in MODES:
+        return mode
+    kb, mouse = attached_keyboard_mouse()
+    return {(False, False): "keyboard-trackpad", (False, True): "keyboard",
+            (True, False): "trackpad", (True, True): "off"}[(kb, mouse)]
+
+
+# ---------------------------------------------------------------- daemon
+class Daemon:
+    def __init__(self, config_path, flip):
+        self.config_path, self.flip = config_path, flip
+        node = find_touchscreen()
+        if not node:
+            sys.exit("op9-desktop-input: no touchscreen")
+        self.ts = os.open(node, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        fcntl.ioctl(self.ts, EVIOCGRAB, 1)
+        self.tx = eviocgabs(self.ts, ABS_MT_POSITION_X)[2]
+        self.ty = eviocgabs(self.ts, ABS_MT_POSITION_Y)[2]
+        nslots = eviocgabs(self.ts, ABS_MT_SLOT)[2] + 1
+        # landscape: the long side across
+        self.W, self.H = self.ty + 1, self.tx + 1
+        self.res = round(self.H / PANEL_MM[0])
+        log(f"grabbed {node}: {self.W}x{self.H} landscape, {nslots} slots, {self.res} units/mm")
+
+        self.kbd = UInput("op9 keyboard", 0x0001, keys=sorted(set(K.values())))
+        self.pad = None
+        self.slots = [{"id": -1, "x": 0, "y": 0, "new": False, "moved": False, "gone": False}
+                      for _ in range(nslots)]
+        self.slot = 0
+        self.contacts = {}        # slot -> region it started in
+        self.next_id = 1
+        self.config_mtime = None
+        self.wanted = None
+        self.mode = None
+        self.regions = []
+
+    # -- mode
+    def read_wanted(self):
+        try:
+            st = os.stat(self.config_path)
+            if st.st_mtime == self.config_mtime:
+                return self.wanted
+            self.config_mtime = st.st_mtime
+            with open(self.config_path) as f:
+                self.wanted = json.load(f).get("mode", "auto")
+        except (OSError, ValueError):
+            self.wanted = self.wanted or "auto"
+        return self.wanted
+
+    def update_mode(self):
+        mode = resolve(self.read_wanted())
+        if mode == self.mode:
+            return
+        self.release_all()
+        self.mode = mode
+        self.regions = layout(mode, self.W, self.H)
+        pads = [r for r in self.regions if r.kind == "pad"]
+        if self.pad:
+            self.pad.close()
+            self.pad = None
+        if pads:
+            p = pads[0]
+            w, h = int(p.w), int(p.h)
+            ax = {ABS_X: (0, w - 1, self.res), ABS_Y: (0, h - 1, self.res),
+                  ABS_MT_SLOT: (0, len(self.slots) - 1, 0), ABS_MT_TRACKING_ID: (0, 65535, 0),
+                  ABS_MT_POSITION_X: (0, w - 1, self.res), ABS_MT_POSITION_Y: (0, h - 1, self.res)}
+            self.pad = UInput("op9 trackpad", 0x0002, absinfo=ax, props=(INPUT_PROP_POINTER,),
+                              keys=(BTN_TOUCH, BTN_TOOL_FINGER, BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP,
+                                    BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP))
+        log(f"phone screen: {mode}" + (f" (auto from {self.wanted})" if self.wanted not in MODES else ""))
+
+    # -- touches
+    def landscape(self, x, y):
+        if self.flip:
+            return self.ty - y, x
+        return y, self.tx - x
+
+    def read_touch(self):
+        try:
+            data = os.read(self.ts, EVENT.size * 64)
+        except BlockingIOError:
+            return
+        for off in range(0, len(data) - EVENT.size + 1, EVENT.size):
+            _, _, t, c, v = EVENT.unpack_from(data, off)
+            if t == EV_ABS:
+                if c == ABS_MT_SLOT:
+                    self.slot = v if 0 <= v < len(self.slots) else 0
+                    continue
+                s = self.slots[self.slot]
+                if c == ABS_MT_TRACKING_ID:
+                    if v >= 0 and s["id"] >= 0 and v != s["id"]:
+                        # another finger took the slot within one report: end the old one first
+                        s["gone"] = True
+                        self.frame()
+                        s["new"] = True
+                    elif v >= 0 and s["id"] < 0:
+                        s["new"] = True
+                    elif v < 0 and s["id"] >= 0:
+                        s["gone"] = True
+                    s["id"] = v
+                elif c == ABS_MT_POSITION_X:
+                    s["x"], s["moved"] = v, True
+                elif c == ABS_MT_POSITION_Y:
+                    s["y"], s["moved"] = v, True
+            elif t == EV_SYN and c == SYN_REPORT:
+                self.frame()
+
+    def frame(self):
+        key_events, pad_events = [], []
+        for i, s in enumerate(self.slots):
+            if not (s["new"] or s["moved"] or s["gone"]):
+                continue
+            lx, ly = self.landscape(s["x"], s["y"])
+            if s["new"] and not s["gone"]:
+                region = next((r for r in self.regions if r.hit(lx, ly)), None)
+                if region:
+                    self.contacts[i] = region
+                    if region.kind == "key":
+                        key_events.append((EV_KEY, region.code, 1))
+                    else:
+                        pad_events += self.pad_touch(i, region, lx, ly, True)
+            elif i in self.contacts:
+                region = self.contacts[i]
+                if s["gone"]:
+                    del self.contacts[i]
+                    if region.kind == "key":
+                        key_events.append((EV_KEY, region.code, 0))
+                    else:
+                        pad_events += [(EV_ABS, ABS_MT_SLOT, i), (EV_ABS, ABS_MT_TRACKING_ID, -1)]
+                elif region.kind == "pad":
+                    pad_events += self.pad_touch(i, region, lx, ly, False)
+            s["new"] = s["moved"] = s["gone"] = False
+        self.kbd.emit(key_events)
+        if pad_events and self.pad:
+            self.pad.emit(pad_events + self.pad_summary())
+
+    def pad_touch(self, i, r, lx, ly, new):
+        x = min(max(int(lx - r.x), 0), int(r.w) - 1)
+        y = min(max(int(ly - r.y), 0), int(r.h) - 1)
+        ev = [(EV_ABS, ABS_MT_SLOT, i)]
+        if new:
+            ev.append((EV_ABS, ABS_MT_TRACKING_ID, self.next_id))
+            self.next_id = self.next_id % 65535 + 1
+        return ev + [(EV_ABS, ABS_MT_POSITION_X, x), (EV_ABS, ABS_MT_POSITION_Y, y)]
+
+    def pad_summary(self):
+        on = [i for i, r in self.contacts.items() if r.kind == "pad"]
+        n = len(on)
+        ev = [(EV_KEY, BTN_TOUCH, int(n > 0))]
+        for count, btn in ((1, BTN_TOOL_FINGER), (2, BTN_TOOL_DOUBLETAP), (3, BTN_TOOL_TRIPLETAP),
+                           (4, BTN_TOOL_QUADTAP), (5, BTN_TOOL_QUINTTAP)):
+            ev.append((EV_KEY, btn, int(n == count or (count == 5 and n > 5))))
+        if on:
+            s = self.slots[on[0]]
+            r = self.contacts[on[0]]
+            lx, ly = self.landscape(s["x"], s["y"])
+            ev += [(EV_ABS, ABS_X, min(max(int(lx - r.x), 0), int(r.w) - 1)),
+                   (EV_ABS, ABS_Y, min(max(int(ly - r.y), 0), int(r.h) - 1))]
+        return ev
+
+    def release_all(self):
+        keys = [(EV_KEY, r.code, 0) for r in self.contacts.values() if r.kind == "key"]
+        pads = [i for i, r in self.contacts.items() if r.kind == "pad"]
+        self.kbd.emit(keys)
+        if self.pad and pads:
+            ev = []
+            for i in pads:
+                ev += [(EV_ABS, ABS_MT_SLOT, i), (EV_ABS, ABS_MT_TRACKING_ID, -1)]
+            self.contacts = {}
+            self.pad.emit(ev + self.pad_summary())
+        self.contacts = {}
+
+    def run(self):
+        signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+        try:
+            checked = 0
+            while True:
+                r, _, _ = select.select([self.ts], [], [], 1.0)
+                if r:
+                    self.read_touch()
+                now = time.monotonic()
+                if now - checked >= 1:
+                    checked = now
+                    self.update_mode()
+        finally:
+            self.release_all()
+
+
+def main():
+    uid = 1000
+    args = sys.argv[1:]
+    if "--uid" in args:
+        uid = int(args[args.index("--uid") + 1])
+    home = pwd.getpwuid(uid).pw_dir
+    Daemon(os.path.join(home, ".config", "op9-desktop", "config.json"), "--flip" in args).run()
+
+
+if __name__ == "__main__":
+    main()

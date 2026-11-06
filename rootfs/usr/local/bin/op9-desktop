@@ -5,7 +5,7 @@
 # desktop mode, then switch to GNOME (op9-desktop.service).
 # In GNOME (desktop mode): set up the phone screen as chosen, and go back to Phosh when the
 # external display is disconnected.
-import fcntl, glob, json, os, subprocess, sys
+import glob, json, os, subprocess, sys
 import xml.etree.ElementTree as ET
 
 import gi
@@ -17,16 +17,15 @@ from gi.repository import Adw, GLib, Gtk, GUdev
 CONFIG = os.path.join(GLib.get_user_config_dir(), "op9-desktop", "config.json")
 MONITORS_XML = os.path.join(GLib.get_user_config_dir(), "monitors.xml")
 PHONE_PANEL = "DSI-1"
-EVIOCGRAB = 0x40044590
 DESKTOP = os.environ.get("XDG_SESSION_DESKTOP", "")
 
 # (id, title, subtitle, built yet)
 MODES = [
     ("auto", "Automatic",
-     "Keyboard and trackpad, keyboard, trackpad or off, from what's connected", False),
-    ("keyboard-trackpad", "Keyboard and trackpad", "For when nothing is connected", False),
-    ("keyboard", "Keyboard", "For when only a mouse is connected", False),
-    ("trackpad", "Trackpad", "For when only a keyboard is connected", False),
+     "Keyboard and trackpad, keyboard, trackpad or off, from what's connected", True),
+    ("keyboard-trackpad", "Keyboard and trackpad", "For when nothing is connected", True),
+    ("keyboard", "Keyboard", "For when only a mouse is connected", True),
+    ("trackpad", "Trackpad", "For when only a keyboard is connected", True),
     ("off", "Off", "The phone screen stays dark and ignores touches", True),
 ]
 
@@ -279,11 +278,11 @@ class PhoneSide:
             config["ask"] = False
         save_config(config)
         log("desktop mode, phone screen:", mode)
-        if mode == "off":
-            try:
-                write_monitors_xml(external_connected())
-            except Exception as e:  # never let this stop the switch
-                log("couldn't store a layout:", e)
+        # GNOME never drives the phone panel: op9-desktop-input owns its touches
+        try:
+            write_monitors_xml(external_connected())
+        except Exception as e:  # never let this stop the switch
+            log("couldn't store a layout:", e)
         start_unit("op9-desktop.service")
 
 
@@ -293,7 +292,6 @@ class DesktopSide:
     def __init__(self, app):
         self.app = app
         self.mode = load_config()["mode"]
-        self.grab = None
         self.seen = False
         self.watch = DisplayWatch(self.changed)
         self.leaving = None
@@ -330,46 +328,19 @@ class DesktopSide:
         return False
 
     def apply_mode(self, connected, tries=0):
+        """Keep GNOME on the external displays only; op9-desktop-input owns the phone screen."""
         log("phone screen:", self.mode)
-        if self.mode == "off":
-            args = ["gdctl", "set"]
-            for i, name in enumerate(connected):
-                args += ["--logical-monitor"] + (["--primary"] if i == 0 else ["--right-of", connected[i - 1]])
-                args += ["--monitor", name]
-            r = subprocess.run(args, capture_output=True, text=True)
-            if r.returncode != 0:
-                if tries < 15:
-                    log("gdctl failed, retrying:", r.stderr.strip())
-                    GLib.timeout_add_seconds(2, lambda: self.apply_mode(external_connected(), tries + 1) and False)
-                    return
-                log("gdctl gave up:", r.stderr.strip())
-            self.grab_touchscreen()
-
-    def grab_touchscreen(self):
-        """Keep the phone screen's touches away from GNOME while it is dark."""
-        if self.grab:
-            return
-        for dev in GUdev.Client(subsystems=["input"]).query_by_subsystem("input"):
-            node = dev.get_device_file()
-            if node and node.startswith("/dev/input/event") and dev.get_property_as_boolean("ID_INPUT_TOUCHSCREEN"):
-                try:
-                    fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
-                    fcntl.ioctl(fd, EVIOCGRAB, 1)
-                except OSError as e:
-                    log("can't grab", node, e)
-                    continue
-                GLib.io_add_watch(fd, GLib.IO_IN, self.drain)
-                self.grab = fd
-                log("grabbed touchscreen", node)
+        args = ["gdctl", "set"]
+        for i, name in enumerate(connected):
+            args += ["--logical-monitor"] + (["--primary"] if i == 0 else ["--right-of", connected[i - 1]])
+            args += ["--monitor", name]
+        r = subprocess.run(args, capture_output=True, text=True)
+        if r.returncode != 0:
+            if tries < 15:
+                log("gdctl failed, retrying:", r.stderr.strip())
+                GLib.timeout_add_seconds(2, lambda: self.apply_mode(external_connected(), tries + 1) and False)
                 return
-
-    def drain(self, fd, cond):
-        try:
-            while os.read(fd, 4096):
-                pass
-        except BlockingIOError:
-            pass
-        return True
+            log("gdctl gave up:", r.stderr.strip())
 
 
 class App(Adw.Application):
