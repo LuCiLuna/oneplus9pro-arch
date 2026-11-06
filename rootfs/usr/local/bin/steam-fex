@@ -1,0 +1,3 @@
+#!/bin/sh
+# Steam is an x86 program: run its launcher through FEX, inside the x86 root filesystem
+exec FEXBash -c "exec steam \"\$@\"" steam "$@"

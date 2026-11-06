@@ -1,0 +1,42 @@
+# FEX, the x86 and x86-64 emulator for Arm64, for running x86 Steam and games.
+# Based on the AUR's fex-emu (Eric Engestrom), which is still at 2412: FEX's
+# submodules have changed since, so take them from the tag itself, without the
+# large test binaries. No FEXConfig (it needs Qt) and no thunks (they need an
+# x86 cross compiler).
+
+pkgname=fex-emu
+pkgver=2610
+pkgrel=1
+pkgdesc='Fast usermode x86 and x86-64 emulator for Arm64'
+url=https://fex-emu.com
+arch=(aarch64)
+license=(MIT)
+makedepends=(git cmake ninja clang lld llvm python-setuptools)
+depends=(squashfs-tools squashfuse erofs-utils)
+source=("git+https://github.com/FEX-Emu/FEX#tag=FEX-$pkgver")
+sha256sums=('SKIP')
+
+prepare() {
+  cd FEX
+  local mods
+  mods=$(git config --file .gitmodules --get-regexp 'submodule\..*\.path' | awk '{print $2}' |
+    grep -v -E 'tests-bins|posixtest')
+  git submodule update --init --depth 1 $mods
+}
+
+build() {
+  CC=clang CXX=clang++ cmake -S FEX -B build -G Ninja \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D CMAKE_BUILD_TYPE=Release \
+    -D USE_LINKER=lld \
+    -D ENABLE_LTO=True \
+    -D BUILD_TESTING=False \
+    -D BUILD_FEXCONFIG=False \
+    -D ENABLE_CCACHE=False
+  ninja -C build
+}
+
+package() {
+  DESTDIR="$pkgdir" ninja -C build install
+  install -Dm644 FEX/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

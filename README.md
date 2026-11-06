@@ -56,6 +56,7 @@ wiping the phone.
 | SMS | ✅ | Sending and receiving, over IMS on AT&T |
 | MMS | ✅ | Sending and receiving pictures with mmsd-tng and Chatty, on AT&T |
 | GPS | ✅ | Apps get it through geoclue; first fix in about a minute outdoors without assistance data, fixes within about 11 m of each other. Turn on Location Services in Settings |
+| x86 games | 🟡 | Steam and Half-Life 2's Linux version run through the FEX emulator; Steam's interface is slow to start. Optional, see the [install guide](docs/INSTALL.md) |
 | Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
 
 More detail is in [docs/STATUS.md](docs/STATUS.md).
@@ -67,7 +68,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 | [`kernel/`](kernel) | 143 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
-| [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, and the modem services |
+| [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, the modem services and FEX |
 | [`firefox/`](firefox) | The FFmpeg patch and shim that give Firefox hardware video decoding, and its settings |
 | [`scripts/`](scripts) | Packing a boot image from a release and your phone's `vendor_boot.img`, and USB internet sharing |
 | [`tools/`](tools) | Source for helper tools |

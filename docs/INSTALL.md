@@ -173,10 +173,14 @@ pacman -Syu
 pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gnome-control-center \
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
-    libnotify swh-plugins
+    libnotify swh-plugins zram-generator
 systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses systemd-pstore op9-lockup-watch
 systemctl set-default graphical.target
 ```
+
+`zram-generator` reads `/etc/systemd/zram-generator.conf` from `rootfs/` and gives the phone about
+5.4 GB of compressed swap in RAM from the next boot, which doesn't wear the flash. Without any swap,
+one program filling the 11 GB froze the whole phone for minutes.
 
 `op9-addresses` gives Wi-Fi and Bluetooth the phone's own addresses, read from the modem with
 `qmicli` once `rmtfs` has started it. That's step 13, so until the modem services are installed,
@@ -394,6 +398,52 @@ phone reboots. Keep it that way. `rmtfs` then starts the modem. Check it with:
 cat /sys/class/remoteproc/remoteproc1/state    # running
 mmcli -L
 ```
+
+## 14. Steam and x86 games (optional)
+
+Steam and most PC games are x86 programs. [FEX](https://fex-emu.com) translates them to Arm64 as
+they run, and the kernel hands x86 programs to it through `binfmt_misc`. Build it on the phone as
+`alarm`, like the packages in step 8:
+
+```sh
+sudo pacman -S --needed clang lld llvm cmake
+(cd ~/op9-pkgs/fex-emu && makepkg -si)
+```
+
+FEX needs an x86-64 root filesystem for the libraries x86 programs load. Fetch Ubuntu 24.04 as
+`alarm` from a real login, over SSH or in the terminal. Under `su` it keeps root's directories and
+fails to save its settings, and FEX then crashes.
+
+```sh
+cd ~ && FEXRootFSFetcher -y -x --distro-name=ubuntu --distro-version=24.04
+FEXBash -c 'uname -m'     # x86_64
+```
+
+If FEX says the RootFS path is empty, write `~/.config/fex-emu/Config.json` with
+`{"Config": {"RootFS": "Ubuntu_24_04"}}`.
+
+Then Valve's Steam launcher. It goes into the x86 root filesystem, apart from its own folder, which
+has to be a real one: FEX's overlay redirects file lookups but not changes of directory, and the
+launcher starts with `cd /usr/lib/steam`. `steam-fex` from `rootfs/` starts it through FEX.
+
+```sh
+R=~/.local/share/fex-emu/RootFS/Ubuntu_24_04
+curl -fsSLO https://repo.steampowered.com/steam/archive/stable/steam_latest.tar.gz
+tar xzf steam_latest.tar.gz
+make -C steam-launcher install PREFIX=/usr DESTDIR=$R
+sudo cp -a $R/usr/lib/steam /usr/lib/
+for s in 16 24 32 48 256; do
+    install -Dm644 $R/usr/share/icons/hicolor/${s}x$s/apps/steam.png \
+        ~/.local/share/icons/hicolor/${s}x$s/apps/steam.png
+done
+sed -e 's#/usr/bin/steam#/usr/local/bin/steam-fex#g' -e '/^PrefersNonDefaultGPU/d;/^X-KDE-RunOnDiscreteGpu/d' \
+    $R/usr/share/applications/steam.desktop > ~/.local/share/applications/steam.desktop
+```
+
+Steam is then in the app grid. Its first start downloads the client, about 500 MB, and is the
+heaviest part: its Chromium-based interface, emulated, runs for minutes on several cores. Closing
+Steam's window leaves it running in the background, since Phosh has no tray to show it: quit it
+with Steam → Exit. Most games need a controller, or a keyboard and mouse.
 
 ## How this phone got here
 

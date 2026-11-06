@@ -21,6 +21,7 @@ tested on earlier builds of the series and haven't been rerun since.
 | Overnight standby, modem running, no SIM | 41 mA average over 3 h 19 min unplugged, including 16 min awake before the idle suspend; then one uninterrupted 3 h sleep |
 | GPS cold start, outdoors, no assistance data | 12 satellites in view after 45 s, fix after 65 s |
 | USB 3 flash drive | 94.5 MB/s read |
+| Swap | 5.4 GB of zram (zstd), compressed in RAM |
 | Charging | 8.84 V at up to 2.77 A on a 25 W charger; 64% to 100% in 58 min, then stops, with the charger running the phone (+10 mA at the battery) |
 | Wireless charging, from a Galaxy S26 Ultra's reverse charging | About 2.2 W in; up to +97 mA at the battery with the phone idle |
 
@@ -61,6 +62,11 @@ tested on earlier builds of the series and haven't been rerun since.
   look for alternate modes after that swap. UCSI reports no alternate modes for either device, so
   Linux can't request one. Turn the logging on with `options pmic_glink_altmode dyndbg=+p` in
   `/etc/modprobe.d/`.
+- **Steam:** x86 programs run through FEX without its library forwarding ("thunks", which need an
+  x86 cross compiler to build), so games' graphics drivers run emulated too. Steam's first start,
+  before the phone had swap, filled all 11 GB with its Chromium interface and froze the phone for
+  minutes until the kernel killed a process. It hasn't been retried with zram yet. Half-Life 2's
+  Linux version was played; no frame rates were measured.
 - **GPU:** one GPU fault with recovery was seen in the compositor, before the memory scaling work.
   A second one on 2026-11-05 started when the GPU woke to dim the screen: the GMU stopped answering
   (`Timeout waiting for GMU OOB set GPU_SET`), the GPU faulted, and after the reset Phosh no longer
