@@ -173,7 +173,8 @@ pacman -Syu
 pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gnome-control-center \
     gnome-keyring networkmanager mesa vulkan-freedreno pipewire-libcamera libcamera libcamera-ipa \
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
-    libnotify swh-plugins zram-generator
+    libnotify swh-plugins zram-generator gvfs-smb gvfs-nfs gvfs-wsdd gvfs-dnssd gvfs-mtp gvfs-gphoto2 \
+    gvfs-afc gvfs-goa
 systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses systemd-pstore op9-lockup-watch
 systemctl set-default graphical.target
 ```
@@ -181,6 +182,13 @@ systemctl set-default graphical.target
 `zram-generator` reads `/etc/systemd/zram-generator.conf` from `rootfs/` and gives the phone about
 5.4 GB of compressed swap in RAM from the next boot, which doesn't wear the flash. Without any swap,
 one program filling the 11 GB froze the whole phone for minutes.
+
+The `gvfs-*` packages are the Files app's backends for other devices. Without them its Network view
+stays empty, and Connect to Server keeps its button greyed out for an `smb://` address, which it
+doesn't recognize. `gvfs-wsdd` finds Windows and Samba file servers (most NASes), `gvfs-dnssd`
+finds devices that announce themselves over mDNS, and `gvfs-smb` and `gvfs-nfs` open their shares.
+`gvfs-mtp`, `gvfs-gphoto2` and `gvfs-afc` cover Android phones, cameras and iPhones plugged in over
+USB, and `gvfs-goa` adds the drives of accounts from Settings → Online Accounts.
 
 `op9-addresses` gives Wi-Fi and Bluetooth the phone's own addresses, read from the modem with
 `qmicli` once `rmtfs` has started it. That's step 13, so until the modem services are installed,
