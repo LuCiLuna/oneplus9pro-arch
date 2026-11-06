@@ -517,6 +517,22 @@ itself and fits the phone screen; it's on Flathub, with AAC support of its own:
 flatpak install flathub com.github.neithern.g4music
 ```
 
+Google publishes Chrome for Arm64 Linux, and Flathub wraps it; the install downloads Google's own
+build. It updates through Software or `flatpak update`, doesn't fit the phone screen as the GNOME
+apps do, and decodes video in software, so Firefox stays the better browser on the phone:
+
+```sh
+flatpak install flathub com.google.Chrome
+```
+
+Claude Code's installer has a native Arm64 build and needs no Node. Run it as `alarm`, not with
+`sudo`, then add `~/.local/bin` to your PATH and start `claude` in a new terminal to sign in:
+
+```sh
+curl -fsSL https://claude.ai/install.sh | bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
 ## 16. Desktop mode (optional)
 
 With desktop mode, plugging in a display offers to run full GNOME on it, with the phone screen as a
