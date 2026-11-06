@@ -7,7 +7,7 @@ Before=ModemManager.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/op9-sim-provision
-TimeoutStartSec=120
+TimeoutStartSec=240
 
 [Install]
 WantedBy=multi-user.target

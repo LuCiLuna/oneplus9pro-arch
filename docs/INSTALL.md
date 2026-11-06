@@ -389,6 +389,22 @@ Add mobile data with your carrier's APN, for example AT&T's `nrphone`:
 sudo nmcli connection add type gsm ifname '*' con-name 'Mobile data' apn nrphone
 ```
 
+A data-only line can need its APN for the LTE attach as well, or the modem stays "searching" with
+signal. AT&T's `NRBROADBAND` lines do: the modem's stored attach APN is a phone one, and the network
+rejects it. The modem forgets the setting at every reboot (`rmtfs -r`, below), so have
+NetworkManager set it each time. Allow only PAP and CHAP: those are all the modem stores, and if
+NetworkManager asks for more, the setting never reads back the same and it retries forever,
+power-cycling the radio each time.
+
+```sh
+sudo nmcli connection add type gsm ifname '*' con-name 'Mobile data' apn NRBROADBAND \
+    gsm.initial-eps-bearer-configure yes gsm.initial-eps-bearer-apn NRBROADBAND \
+    gsm.initial-eps-bearer-noauth no gsm.initial-eps-bearer-refuse-eap yes \
+    gsm.initial-eps-bearer-refuse-mschap yes gsm.initial-eps-bearer-refuse-mschapv2 yes
+```
+
+To keep a profile per SIM, add `gsm.sim-id` with the SIM's ICCID (`mmcli -i 0 | grep iccid`).
+
 `rmtfs` serves the modem's storage from the `modemst1`, `modemst2`, `fsg` and `fsc` partitions.
 The packaged service runs it with `-r`, so the modem's writes stay in memory and those partitions
 are only read: Linux can never corrupt them, and the modem forgets anything it saved when the

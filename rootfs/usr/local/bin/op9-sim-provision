@@ -6,15 +6,17 @@
 Q="qmicli -d qrtr://0"
 status() { $Q --uim-get-card-status 2>/dev/null; }
 
-# Wait up to 90 s for the modem's SIM service and for the card to answer
-for i in $(seq 1 45); do
+usim_aid() { echo "$1" | grep -A3 "usim (2)" | grep -A1 "Application ID" | tail -1 | tr -d ' \t' | grep -E '^([0-9A-F]{2}:)+[0-9A-F]{2}$'; }
+
+# Wait for the modem's SIM service and for the card to list its USIM app. Some cards
+# take well over 90 s after boot (an AT&T data SIM did), so allow up to 3 minutes.
+for i in $(seq 1 90); do
 	s=$(status)
-	echo "$s" | grep -q "Card state: 'present'" && echo "$s" | grep -q "usim (2)" && break
+	echo "$s" | grep -q "Primary GW:   slot" && { echo "primary session already open"; exit 0; }
+	echo "$s" | grep -q "Card state: 'present'" && aid=$(usim_aid "$s") && break
 	echo "$s" | grep -q "Card state: 'absent'" && [ "$i" -gt 10 ] && { echo "no SIM"; exit 0; }
 	sleep 2
 done
-echo "$s" | grep -q "Primary GW:   slot" && { echo "primary session already open"; exit 0; }
-
-aid=$(echo "$s" | grep -A3 "usim (2)" | grep -A1 "Application ID" | tail -1 | tr -d ' \t')
-[ -n "$aid" ] || { echo "no USIM app on the SIM" >&2; exit 1; }
+[ -n "$aid" ] || { echo "no USIM app on the SIM after 3 minutes" >&2; exit 1; }
+echo "USIM app found after about $((i * 2)) s"
 $Q --uim-change-provisioning-session="session-type=primary-gw-provisioning,activate=yes,slot=1,aid=$aid"
