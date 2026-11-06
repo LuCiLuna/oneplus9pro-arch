@@ -101,6 +101,22 @@ tested on earlier builds of the series and haven't been rerun since.
 - **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
   bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
 
+## Desktop mode
+
+Plugging in a display (tested with a USB-C to HDMI adapter and a Samsung TV) opens a chooser on the
+phone. Start desktop stops Phosh and its apps and runs a full GNOME session on the external
+display, with the phone panel off and its touchscreen ignored. Unplugging, or no display showing
+up within 20 s, brings Phosh back. The choice can be remembered.
+
+- `op9-desktop` is both the chooser under Phosh and the helper under GNOME. It writes GNOME's
+  `monitors.xml` from the display's EDID before starting, so GNOME never opens on the phone first.
+- Between the two compositors, the kernel console redrew itself onto every screen and left planes
+  that mutter can't move off it. `op9-kms-reset` unbinds the console and detaches leftover planes.
+- Patch 0144 keeps DP off the mixers and CTL the panel needs. Without it, the panel came back on
+  other blocks after desktop mode and never drew a frame until a reboot.
+- GNOME scans out linear buffers: 10-bit UBWC-compressed ones showed black on DP.
+- Not done yet: the phone screen as a keyboard and trackpad, docks (see Known problems) and MST.
+
 ## Fingerprint reader
 
 The under-display Goodix sensor doesn't appear to be something Linux can drive directly. On stock,

@@ -30,6 +30,7 @@ wiping the phone.
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz; the phone's own address is read from the modem at boot |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
+| Desktop mode | 🟡 | Plugging in a display offers to open full GNOME on it, with the phone screen off. The phone screen as a keyboard and trackpad is in progress |
 | Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and reports the battery full until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
 | Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Works the same as USB otherwise; USB takes over if both are attached |
 | Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed. fastfetch shows USB or Wireless Connected |

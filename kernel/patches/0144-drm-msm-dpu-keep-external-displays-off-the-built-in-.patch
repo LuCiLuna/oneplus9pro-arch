@@ -1,0 +1,160 @@
+From a4db75f5b5b7f042cd5910890d88e8a976e9fb8d Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 02:44:30 -0600
+Subject: [PATCH] drm/msm/dpu: keep external displays off the built-in panel's
+ blocks
+
+On SM8350 the DSC command-mode panel runs on LM_0/LM_1 (with PINGPONG_0/1
+and DSC_0/1) and CTL_0. The resource manager hands out the first free
+blocks, so when the panel is off and DP is enabled (GNOME desktop mode
+turns the panel off), DP takes them. Turning the panel back on then puts
+it on LM_2/LM_3 or CTL_1, where it never completes a frame: kickoff
+timeouts on pp:2, DSI errors, a corrupted screen, and only a reboot
+brings it back.
+
+The vendor driver reserves those blocks for the primary display
+("qcom,sde-mixer-display-pref" and "qcom,sde-ctl-display-pref" give LM_0,
+LM_1 and CTL_0 to "primary"). Do the same: mark DP topologies external
+and search their mixers from LM_2 and their CTL from CTL_1 first, falling
+back to the full search when nothing else fits.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c |  3 ++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c      | 53 +++++++++++++++++----
+ drivers/gpu/drm/msm/disp/dpu1/dpu_rm.h      |  3 ++
+ 3 files changed, 50 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index d0acefa2077..0d4caf569ef 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -686,6 +686,9 @@ void dpu_encoder_update_topology(struct drm_encoder *drm_enc,
+ 		if (dpu_enc->phys_encs[i])
+ 			topology->num_intf++;
+ 
++	if (disp_info->intf_type == INTF_DP)
++		topology->external = true;
++
+ 	dsc = dpu_encoder_get_dsc_config(drm_enc);
+ 
+ 	/* We only support 2 DSC mode (with 2 LM and 1 INTF) */
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c
+index 7e77d88f895..2853467cff6 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c
+@@ -350,11 +350,11 @@ static bool _dpu_rm_check_lm_and_get_connected_blks(struct dpu_rm *rm,
+ 	return true;
+ }
+ 
+-static int _dpu_rm_reserve_lms(struct dpu_rm *rm,
+-			       struct dpu_global_state *global_state,
+-			       uint32_t crtc_id,
+-			       struct msm_display_topology *topology)
+-
++static int __dpu_rm_reserve_lms(struct dpu_rm *rm,
++				struct dpu_global_state *global_state,
++				uint32_t crtc_id,
++				struct msm_display_topology *topology,
++				int first_lm)
+ {
+ 	int lm_idx[MAX_BLOCKS];
+ 	int pp_idx[MAX_BLOCKS];
+@@ -367,7 +367,7 @@ static int _dpu_rm_reserve_lms(struct dpu_rm *rm,
+ 	}
+ 
+ 	/* Find a primary mixer */
+-	for (i = 0; i < ARRAY_SIZE(rm->mixer_blks) &&
++	for (i = first_lm; i < ARRAY_SIZE(rm->mixer_blks) &&
+ 			lm_count < topology->num_lm; i++) {
+ 		if (!rm->mixer_blks[i])
+ 			continue;
+@@ -428,11 +428,32 @@ static int _dpu_rm_reserve_lms(struct dpu_rm *rm,
+ 	return 0;
+ }
+ 
+-static int _dpu_rm_reserve_ctls(
++/*
++ * The built-in panel path is LM_0/LM_1 (with their PINGPONG/DSC) and CTL_0. The
++ * vendor driver reserves those for the primary display ("qcom,sde-mixer-display-
++ * pref", "qcom,sde-ctl-display-pref"). When DP took them while the panel was
++ * off, the DSC command-mode panel came back elsewhere and never completed a
++ * frame (kickoff timeouts, DSI errors) until a reboot. Keep external displays
++ * off them unless nothing else fits.
++ */
++static int _dpu_rm_reserve_lms(struct dpu_rm *rm,
++			       struct dpu_global_state *global_state,
++			       uint32_t crtc_id,
++			       struct msm_display_topology *topology)
++{
++	if (topology->external && rm->mixer_blks[2] &&
++	    !__dpu_rm_reserve_lms(rm, global_state, crtc_id, topology, 2))
++		return 0;
++
++	return __dpu_rm_reserve_lms(rm, global_state, crtc_id, topology, 0);
++}
++
++static int __dpu_rm_reserve_ctls(
+ 		struct dpu_rm *rm,
+ 		struct dpu_global_state *global_state,
+ 		uint32_t crtc_id,
+-		const struct msm_display_topology *top)
++		const struct msm_display_topology *top,
++		int first_ctl)
+ {
+ 	int ctl_idx[MAX_BLOCKS];
+ 	int i = 0, j, num_ctls;
+@@ -452,7 +473,7 @@ static int _dpu_rm_reserve_ctls(
+ 		needs_split_display = false;
+ 	}
+ 
+-	for (j = 0; j < ARRAY_SIZE(rm->ctl_blks); j++) {
++	for (j = first_ctl; j < ARRAY_SIZE(rm->ctl_blks); j++) {
+ 		const struct dpu_hw_ctl *ctl;
+ 		unsigned long features;
+ 		bool has_split_display;
+@@ -490,6 +511,20 @@ static int _dpu_rm_reserve_ctls(
+ 	return 0;
+ }
+ 
++/* CTL_0 belongs to the built-in panel too ("qcom,sde-ctl-display-pref"). */
++static int _dpu_rm_reserve_ctls(
++		struct dpu_rm *rm,
++		struct dpu_global_state *global_state,
++		uint32_t crtc_id,
++		const struct msm_display_topology *top)
++{
++	if (top->external && rm->ctl_blks[1] &&
++	    !__dpu_rm_reserve_ctls(rm, global_state, crtc_id, top, 1))
++		return 0;
++
++	return __dpu_rm_reserve_ctls(rm, global_state, crtc_id, top, 0);
++}
++
+ static int _dpu_rm_pingpong_next_index(struct dpu_global_state *global_state,
+ 				       int start,
+ 				       uint32_t crtc_id)
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.h
+index ccd64404f12..01d140c9c8d 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.h
+@@ -56,6 +56,8 @@ struct dpu_rm_sspp_requirements {
+  * @num_cdm:      indicates how many outputs are requesting cdm block for
+  *                    this display topology
+  * @cwb_enabled:  indicates whether CWB is enabled for this display topology
++ * @external:     the display is an external (DP) one, which should leave the
++ *                first mixer pair to the built-in panel
+  */
+ struct msm_display_topology {
+ 	u32 num_lm;
+@@ -64,6 +66,7 @@ struct msm_display_topology {
+ 	u32 num_dsc;
+ 	int num_cdm;
+ 	bool cwb_enabled;
++	bool external;
+ };
+ 
+ int dpu_rm_init(struct drm_device *dev,
+-- 
+2.56.0
+

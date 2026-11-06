@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop mode
+Comment=Choose what the phone screen does in desktop mode
+Icon=video-display-symbolic
+Exec=/usr/local/bin/op9-desktop
+NoDisplay=true

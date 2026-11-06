@@ -1,0 +1,4 @@
+#!/bin/sh
+# Started by op9-desktop.service as the phone's user: a GNOME session on the external display.
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+exec systemd-cat -t gnome-session gnome-session

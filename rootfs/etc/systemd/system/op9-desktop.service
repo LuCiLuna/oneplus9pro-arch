@@ -1,0 +1,27 @@
+# Desktop mode: GNOME on the external display. Starting it stops Phosh (and its apps);
+# when it ends, for any reason, Phosh starts again.
+[Unit]
+Description=GNOME desktop mode
+After=systemd-user-sessions.service
+Wants=dbus.socket systemd-logind.service
+Conflicts=getty@tty7.service phosh.service
+After=getty@tty7.service phosh.service
+
+[Service]
+Type=simple
+ExecStartPre=+/usr/bin/chvt 7
+ExecStartPre=+/usr/local/bin/op9-kms-reset
+# See op9-desktop.conf for Phosh: keep the kernel console off the screens while switching.
+ExecStop=+/usr/local/bin/op9-kms-reset --console-off
+ExecStart=/usr/local/bin/op9-desktop-session
+ExecStopPost=+/usr/bin/systemctl --no-block start phosh.service
+User=1000
+WorkingDirectory=~
+PAMName=op9-desktop
+Environment=XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_DESKTOP=gnome
+TTYPath=/dev/tty7
+StandardInput=tty
+TTYReset=yes
+TTYVHangup=yes
+UtmpIdentifier=tty7
+UtmpMode=user

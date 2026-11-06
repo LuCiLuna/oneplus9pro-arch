@@ -1,0 +1,112 @@
+#!/usr/bin/python3 -I
+# Hand the display over cleanly between Phosh and GNOME desktop mode.
+#
+#   op9-kms-reset --console-off   (ExecStop, while the old compositor still runs)
+#       Unbind fbcon and turn off fbdev emulation. Otherwise, the moment the
+#       compositor drops DRM master, fbcon redraws, pans and commits its own
+#       layout onto every screen (the pan path ignores fbdev_emulation).
+#
+#   op9-kms-reset                 (ExecStartPre=+, before the new compositor)
+#       Detach every plane. mutter cannot move a plane that another client left
+#       on a different CRTC ("switching CRTC directly", EINVAL on every flip).
+#       No modeset, so the CRTCs and the DP link stay up.
+import ctypes as C
+import glob
+import os
+import sys
+
+
+def console_off():
+    try:
+        with open("/sys/module/drm_kms_helper/parameters/fbdev_emulation", "w") as f:
+            f.write("0")
+    except OSError as e:
+        print(f"op9-kms-reset: fbdev_emulation: {e}", file=sys.stderr)
+    for vt in glob.glob("/sys/class/vtconsole/vtcon*"):
+        try:
+            with open(vt + "/name") as f:
+                if "frame buffer" not in f.read():
+                    continue
+            with open(vt + "/bind", "w") as f:
+                f.write("0")
+        except OSError as e:
+            print(f"op9-kms-reset: {vt}: {e}", file=sys.stderr)
+
+
+class PlaneRes(C.Structure):
+    _fields_ = [("count_planes", C.c_uint32), ("planes", C.POINTER(C.c_uint32))]
+
+
+class ObjProps(C.Structure):
+    _fields_ = [("count_props", C.c_uint32), ("props", C.POINTER(C.c_uint32)),
+                ("prop_values", C.POINTER(C.c_uint64))]
+
+
+class PropRes(C.Structure):
+    _fields_ = [("prop_id", C.c_uint32), ("flags", C.c_uint32), ("name", C.c_char * 32)]
+
+
+DRM_CLIENT_CAP_UNIVERSAL_PLANES = 2
+DRM_CLIENT_CAP_ATOMIC = 3
+DRM_MODE_OBJECT_PLANE = 0xEEEEEEEE
+
+
+def detach_planes(card):
+    drm = C.CDLL("libdrm.so.2", use_errno=True)
+    drm.drmModeGetPlaneResources.restype = C.POINTER(PlaneRes)
+    drm.drmModeObjectGetProperties.restype = C.POINTER(ObjProps)
+    drm.drmModeGetProperty.restype = C.POINTER(PropRes)
+    drm.drmModeAtomicAlloc.restype = C.c_void_p
+    drm.drmModeAtomicAddProperty.argtypes = [C.c_void_p, C.c_uint32, C.c_uint32, C.c_uint64]
+    drm.drmModeAtomicCommit.argtypes = [C.c_int, C.c_void_p, C.c_uint32, C.c_void_p]
+    drm.drmModeAtomicFree.argtypes = [C.c_void_p]
+
+    fd = os.open(card, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        if drm.drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) or \
+           drm.drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1):
+            raise OSError(C.get_errno(), "atomic not supported")
+        res = drm.drmModeGetPlaneResources(fd)
+        if not res:
+            raise OSError(C.get_errno(), "no planes")
+        req = drm.drmModeAtomicAlloc()
+        detached = 0
+        for i in range(res.contents.count_planes):
+            plane = res.contents.planes[i]
+            props = drm.drmModeObjectGetProperties(fd, plane, DRM_MODE_OBJECT_PLANE)
+            ids = {}
+            on = False
+            for j in range(props.contents.count_props):
+                p = drm.drmModeGetProperty(fd, props.contents.props[j])
+                name = p.contents.name.decode()
+                ids[name] = p.contents.prop_id
+                if name == "CRTC_ID" and props.contents.prop_values[j]:
+                    on = True
+                drm.drmModeFreeProperty(p)
+            drm.drmModeFreeObjectProperties(props)
+            if on:
+                drm.drmModeAtomicAddProperty(req, plane, ids["CRTC_ID"], 0)
+                drm.drmModeAtomicAddProperty(req, plane, ids["FB_ID"], 0)
+                detached += 1
+        drm.drmModeFreePlaneResources(res)
+        ret = drm.drmModeAtomicCommit(fd, req, 0, None) if detached else 0
+        err = C.get_errno()
+        drm.drmModeAtomicFree(req)
+        if ret:
+            raise OSError(err, f"commit failed detaching {detached} planes")
+        print(f"op9-kms-reset: {card}: detached {detached} planes")
+    finally:
+        os.close(fd)
+
+
+if "--console-off" in sys.argv[1:]:
+    console_off()
+    sys.exit(0)
+
+console_off()
+for card in sorted(glob.glob("/dev/dri/card*")):
+    try:
+        detach_planes(card)
+    except OSError as e:
+        # Never block the session over this; the compositor may still cope.
+        print(f"op9-kms-reset: {card}: {e}", file=sys.stderr)

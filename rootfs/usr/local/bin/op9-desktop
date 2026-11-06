@@ -1,0 +1,392 @@
+#!/usr/bin/python3 -I
+# Desktop mode for the OnePlus 9 Pro.
+#
+# In Phosh: when an external display is connected, ask what the phone screen should be in
+# desktop mode, then switch to GNOME (op9-desktop.service).
+# In GNOME (desktop mode): set up the phone screen as chosen, and go back to Phosh when the
+# external display is disconnected.
+import fcntl, glob, json, os, subprocess, sys
+import xml.etree.ElementTree as ET
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("GUdev", "1.0")
+from gi.repository import Adw, GLib, Gtk, GUdev
+
+CONFIG = os.path.join(GLib.get_user_config_dir(), "op9-desktop", "config.json")
+MONITORS_XML = os.path.join(GLib.get_user_config_dir(), "monitors.xml")
+PHONE_PANEL = "DSI-1"
+EVIOCGRAB = 0x40044590
+DESKTOP = os.environ.get("XDG_SESSION_DESKTOP", "")
+
+# (id, title, subtitle, built yet)
+MODES = [
+    ("auto", "Automatic",
+     "Keyboard and trackpad, keyboard, trackpad or off, from what's connected", False),
+    ("keyboard-trackpad", "Keyboard and trackpad", "For when nothing is connected", False),
+    ("keyboard", "Keyboard", "For when only a mouse is connected", False),
+    ("trackpad", "Trackpad", "For when only a keyboard is connected", False),
+    ("off", "Off", "The phone screen stays dark and ignores touches", True),
+]
+
+
+def log(*a):
+    print("op9-desktop:", *a, flush=True)
+
+
+def load_config():
+    try:
+        with open(CONFIG) as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        c = {}
+    mode = c.get("mode", "off")
+    if not any(m[0] == mode and m[3] for m in MODES):
+        mode = "off"
+    return {"mode": mode, "ask": c.get("ask", True)}
+
+
+def save_config(c):
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    with open(CONFIG + ".tmp", "w") as f:
+        json.dump(c, f)
+    os.replace(CONFIG + ".tmp", CONFIG)
+
+
+def external_connected():
+    """Names of connected external connectors (DP-1, ...)."""
+    out = []
+    for p in glob.glob("/sys/class/drm/card*-*/status"):
+        name = os.path.basename(os.path.dirname(p)).split("-", 1)[1]
+        if name.startswith(("DSI", "Writeback")):
+            continue
+        try:
+            if open(p).read().strip() == "connected":
+                out.append(name)
+        except OSError:
+            pass
+    return sorted(out)
+
+
+def edid_identity(connector):
+    """(vendor, product, serial, (width, height, refresh)) the way mutter names a monitor,
+    from the connector's EDID, or None."""
+    paths = glob.glob(f"/sys/class/drm/card*-{connector}/edid")
+    try:
+        e = open(paths[0], "rb").read() if paths else b""
+    except OSError:
+        e = b""
+    if len(e) < 128 or e[:8] != bytes.fromhex("00ffffffffffff00"):
+        return None
+    v = (e[8] << 8) | e[9]
+    vendor = "".join(chr(((v >> s) & 31) + 64) for s in (10, 5, 0))
+    product, serial, mode = None, None, None
+    for off in range(54, 126, 18):
+        d = e[off:off + 18]
+        clock = d[0] | (d[1] << 8)
+        if clock:
+            if mode is None:
+                ha = d[2] | ((d[4] & 0xF0) << 4); hb = d[3] | ((d[4] & 0x0F) << 8)
+                va = d[5] | ((d[7] & 0xF0) << 4); vb = d[6] | ((d[7] & 0x0F) << 8)
+                mode = (ha, va, clock * 10000 / ((ha + hb) * (va + vb)))
+            continue
+        text = d[5:18].split(b"\n")[0].decode("cp437").rstrip()
+        if d[3] == 0xFC:
+            product = text
+        elif d[3] == 0xFF:
+            serial = text
+    if product is None:
+        product = "0x%04x" % (e[10] | (e[11] << 8))
+    if serial is None:
+        n = int.from_bytes(e[12:16], "little")
+        serial = "0x%08x" % n if n else "unknown"
+    return vendor, product, serial, mode
+
+
+def spec_xml(parent, ident):
+    spec = ET.SubElement(parent, "monitorspec")
+    for tag, val in zip(("connector", "vendor", "product", "serial"), ident):
+        ET.SubElement(spec, tag).text = val
+
+
+def spec_key(spec):
+    return tuple(spec.findtext(t) for t in ("connector", "vendor", "product", "serial"))
+
+
+def write_monitors_xml(connected):
+    """Give GNOME a stored layout for these displays with the phone screen disabled, so it
+    starts that way instead of showing up on the phone screen first."""
+    panel = (PHONE_PANEL, "unknown", "unknown", "unknown")
+    ext = []
+    for name in connected:
+        ident = edid_identity(name)
+        if not ident or not ident[3]:
+            log("no usable EDID for", name, "- GNOME will start on the phone screen first")
+            return
+        ext.append(((name,) + ident[:3], ident[3]))
+    key = {panel} | {i for i, _ in ext}
+    try:
+        root = ET.parse(MONITORS_XML).getroot()
+    except (OSError, ET.ParseError):
+        root = ET.Element("monitors", version="2")
+    for conf in root.findall("configuration"):
+        if {spec_key(s) for s in conf.iter("monitorspec")} == key:
+            if any(spec_key(s) == panel for s in conf.findall("disabled/monitorspec")):
+                return  # already has the phone screen off (maybe tuned in Settings): keep it
+            root.remove(conf)
+    conf = ET.SubElement(root, "configuration")
+    ET.SubElement(conf, "layoutmode").text = "logical"
+    x = 0
+    for n, (ident, (w, h, rate)) in enumerate(ext):
+        lm = ET.SubElement(conf, "logicalmonitor")
+        ET.SubElement(lm, "x").text = str(x)
+        ET.SubElement(lm, "y").text = "0"
+        ET.SubElement(lm, "scale").text = "1"
+        if n == 0:
+            ET.SubElement(lm, "primary").text = "yes"
+        mon = ET.SubElement(lm, "monitor")
+        spec_xml(mon, ident)
+        mode = ET.SubElement(mon, "mode")
+        ET.SubElement(mode, "width").text = str(w)
+        ET.SubElement(mode, "height").text = str(h)
+        ET.SubElement(mode, "rate").text = "%.3f" % rate
+        x += w
+    spec_xml(ET.SubElement(conf, "disabled"), panel)
+    ET.indent(root)
+    os.makedirs(os.path.dirname(MONITORS_XML), exist_ok=True)
+    ET.ElementTree(root).write(MONITORS_XML + ".tmp", encoding="unicode")
+    os.replace(MONITORS_XML + ".tmp", MONITORS_XML)
+    log("stored a layout for", ", ".join(i[0] for i, _ in ext), "with the phone screen off")
+
+
+def start_unit(unit):
+    log("starting", unit)
+    subprocess.run(["systemctl", "start", "--no-block", unit])
+
+
+class DisplayWatch:
+    """Calls changed(connected_names) whenever external displays come or go."""
+
+    def __init__(self, changed):
+        self.changed = changed
+        self.state = external_connected()
+        self.client = GUdev.Client(subsystems=["drm"])
+        self.client.connect("uevent", self.on_uevent)
+
+    def on_uevent(self, client, action, device):
+        # The connector status in sysfs is only updated once a compositor probes the
+        # connector after the hotplug event, so look again over the next few seconds.
+        for delay in (500, 1500, 3000, 6000):
+            GLib.timeout_add(delay, self.check)
+
+    def check(self):
+        now = external_connected()
+        if now != self.state:
+            self.state = now
+            self.changed(now)
+        return False
+
+
+class Chooser(Adw.ApplicationWindow):
+    def __init__(self, app, config, done):
+        super().__init__(application=app, title="Desktop mode")
+        self.done = done
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(
+            title="Phone screen",
+            description="A display is connected. GNOME opens on it, and phone apps close.")
+        page.add(group)
+        first = None
+        self.checks = {}
+        for mode, title, subtitle, built in MODES:
+            row = Adw.ActionRow(title=title, subtitle=subtitle if built else "Not available yet")
+            check = Gtk.CheckButton(group=first, active=(mode == config["mode"]), sensitive=built)
+            first = first or check
+            row.add_prefix(check)
+            row.set_activatable_widget(check)
+            row.set_sensitive(built)
+            group.add(row)
+            self.checks[mode] = check
+        other = Adw.PreferencesGroup()
+        self.remember = Adw.SwitchRow(title="Don't ask again",
+                                      subtitle="Start desktop mode this way when a display is connected")
+        other.add(self.remember)
+        page.add(other)
+
+        stay = Gtk.Button(label="Stay in phone mode", hexpand=True)
+        go = Gtk.Button(label="Start desktop", hexpand=True, css_classes=["suggested-action"])
+        stay.connect("clicked", lambda b: self.finish(None))
+        go.connect("clicked", lambda b: self.finish(self.selected()))
+        buttons = Gtk.Box(spacing=12, margin_start=12, margin_end=12, margin_top=6, margin_bottom=12)
+        buttons.append(stay)
+        buttons.append(go)
+
+        view = Adw.ToolbarView(content=page)
+        view.add_top_bar(Adw.HeaderBar())
+        view.add_bottom_bar(buttons)
+        self.set_content(view)
+        self.connect("close-request", lambda w: self.finish(None) or False)
+
+    def selected(self):
+        return next(m for m, c in self.checks.items() if c.get_active())
+
+    def finish(self, mode):
+        done, self.done = self.done, None
+        if done:
+            done(mode, self.remember.get_active())
+        self.destroy()
+
+
+class PhoneSide:
+    """Running in Phosh: offer desktop mode when a display is connected."""
+
+    def __init__(self, app):
+        self.app = app
+        self.chooser = None
+        self.watch = DisplayWatch(self.changed)
+        if self.watch.state or "--chooser" in sys.argv:
+            GLib.timeout_add_seconds(3, lambda: self.changed(self.watch.state or ["test"]) and False)
+
+    def changed(self, connected):
+        log("external displays:", connected or "none")
+        if not connected:
+            if self.chooser:
+                self.chooser.done = None
+                self.chooser.destroy()
+                self.chooser = None
+            return
+        if self.chooser:
+            return
+        config = load_config()
+        if not config["ask"]:
+            self.start(config["mode"], False)
+            return
+        self.chooser = Chooser(self.app, config, self.chosen)
+        self.chooser.present()
+
+    def chosen(self, mode, remember):
+        self.chooser = None
+        if mode is None:
+            log("staying in phone mode")
+            return
+        self.start(mode, remember)
+
+    def start(self, mode, remember):
+        config = load_config()
+        config["mode"] = mode
+        if remember:
+            config["ask"] = False
+        save_config(config)
+        log("desktop mode, phone screen:", mode)
+        if mode == "off":
+            try:
+                write_monitors_xml(external_connected())
+            except Exception as e:  # never let this stop the switch
+                log("couldn't store a layout:", e)
+        start_unit("op9-desktop.service")
+
+
+class DesktopSide:
+    """Running in desktop mode: set up the phone screen, and go back when unplugged."""
+
+    def __init__(self, app):
+        self.app = app
+        self.mode = load_config()["mode"]
+        self.grab = None
+        self.seen = False
+        self.watch = DisplayWatch(self.changed)
+        self.leaving = None
+        if self.watch.state:
+            self.changed(self.watch.state)
+        # Started without a display (or it never came up): don't leave the user in GNOME on
+        # the phone screen by surprise.
+        GLib.timeout_add_seconds(20, self.check_started)
+
+    def check_started(self):
+        if not self.seen:
+            log("no external display after 20 s, back to phone mode")
+            start_unit("phosh.service")
+        return False
+
+    def changed(self, connected):
+        log("external displays:", connected or "none")
+        if connected:
+            if self.leaving:
+                GLib.source_remove(self.leaving)
+                self.leaving = None
+            if not self.seen:
+                self.seen = True
+                self.apply_mode(connected)
+        elif self.seen and not self.leaving:
+            # docks renegotiate and cables wiggle: only leave if it stays gone
+            self.leaving = GLib.timeout_add_seconds(3, self.leave)
+
+    def leave(self):
+        self.leaving = None
+        if not external_connected():
+            log("external display gone, back to phone mode")
+            start_unit("phosh.service")
+        return False
+
+    def apply_mode(self, connected, tries=0):
+        log("phone screen:", self.mode)
+        if self.mode == "off":
+            args = ["gdctl", "set"]
+            for i, name in enumerate(connected):
+                args += ["--logical-monitor"] + (["--primary"] if i == 0 else ["--right-of", connected[i - 1]])
+                args += ["--monitor", name]
+            r = subprocess.run(args, capture_output=True, text=True)
+            if r.returncode != 0:
+                if tries < 15:
+                    log("gdctl failed, retrying:", r.stderr.strip())
+                    GLib.timeout_add_seconds(2, lambda: self.apply_mode(external_connected(), tries + 1) and False)
+                    return
+                log("gdctl gave up:", r.stderr.strip())
+            self.grab_touchscreen()
+
+    def grab_touchscreen(self):
+        """Keep the phone screen's touches away from GNOME while it is dark."""
+        if self.grab:
+            return
+        for dev in GUdev.Client(subsystems=["input"]).query_by_subsystem("input"):
+            node = dev.get_device_file()
+            if node and node.startswith("/dev/input/event") and dev.get_property_as_boolean("ID_INPUT_TOUCHSCREEN"):
+                try:
+                    fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
+                    fcntl.ioctl(fd, EVIOCGRAB, 1)
+                except OSError as e:
+                    log("can't grab", node, e)
+                    continue
+                GLib.io_add_watch(fd, GLib.IO_IN, self.drain)
+                self.grab = fd
+                log("grabbed touchscreen", node)
+                return
+
+    def drain(self, fd, cond):
+        try:
+            while os.read(fd, 4096):
+                pass
+        except BlockingIOError:
+            pass
+        return True
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.op9.DesktopMode")
+        self.side = None
+
+    def do_activate(self):
+        if self.side:
+            return
+        self.hold()
+        if DESKTOP == "gnome":
+            self.side = DesktopSide(self)
+        else:
+            self.side = PhoneSide(self)
+
+
+if __name__ == "__main__":
+    # --chooser: show the chooser now, as if a display was connected (for testing)
+    sys.exit(App().run([sys.argv[0]]))

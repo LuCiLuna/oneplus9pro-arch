@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop mode
+Comment=Offers desktop mode when a display is connected, and runs the phone screen in it
+Exec=/usr/local/bin/op9-desktop
+NoDisplay=true
+X-GNOME-AutoRestart=true
