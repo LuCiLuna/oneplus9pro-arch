@@ -517,6 +517,22 @@ itself and fits the phone screen; it's on Flathub, with AAC support of its own:
 flatpak install flathub com.github.neithern.g4music
 ```
 
+## 16. Desktop mode (optional)
+
+With desktop mode, plugging in a display offers to run full GNOME on it, with the phone screen as a
+keyboard and trackpad (see [STATUS](STATUS.md)). The files in `rootfs/` start it by themselves;
+it needs GNOME and the Python libraries its helpers use:
+
+```sh
+sudo pacman -S --needed gnome-shell gnome-session mutter libgudev libadwaita gtk4 python-gobject \
+    python-cairo
+```
+
+Nothing needs enabling: `op9-desktop` starts with the session and asks when a display is
+connected, and `op9-desktop.service` brings in `op9-desktop-input`. Without `python-cairo`, the
+keyboard and trackpad still work but the phone screen stays dark. Only displays behind a USB-C to
+HDMI or DisplayPort adapter work for now; docks and MST hubs don't.
+
 ## How this phone got here
 
 The phone first ran Linux from a `linux` logical partition inside `super`, was built up over USB,

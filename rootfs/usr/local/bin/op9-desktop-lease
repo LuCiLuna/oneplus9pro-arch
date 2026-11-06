@@ -1,0 +1,179 @@
+#!/usr/bin/python3 -I
+# Desktop mode: lease the phone screen (DSI-1) from GNOME through wp_drm_lease_v1 and hand
+# the lease's DRM file descriptor to op9-desktop-input, which draws the keyboard and trackpad.
+#
+# The lease lasts as long as this process keeps its Wayland connection, so it stays running
+# and exits when GNOME ends the lease. A minimal Wayland client: python-pywayland isn't
+# packaged, and this needs only the registry and the drm-lease objects.
+import array
+import os
+import select
+import socket
+import struct
+import sys
+
+CONNECTOR = sys.argv[1] if len(sys.argv) > 1 else "DSI-1"
+DAEMON = "/run/op9-desktop-input.sock"
+
+
+def log(*a):
+    print("op9-desktop-lease:", *a, flush=True)
+
+
+class Wayland:
+    def __init__(self):
+        path = os.path.join(os.environ["XDG_RUNTIME_DIR"], os.environ.get("WAYLAND_DISPLAY", "wayland-0"))
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(path)
+        self.next_id = 2          # 1 is wl_display
+        self.buf = b""
+        self.fds = []
+        self.types = {1: "wl_display"}
+
+    def new_id(self, kind):
+        i = self.next_id
+        self.next_id += 1
+        self.types[i] = kind
+        return i
+
+    def send(self, obj, opcode, payload=b""):
+        self.sock.sendall(struct.pack("=II", obj, ((8 + len(payload)) << 16) | opcode) + payload)
+
+    @staticmethod
+    def string(s):
+        b = s.encode() + b"\0"
+        return struct.pack("=I", len(b)) + b + b"\0" * (-len(b) % 4)
+
+    def read(self):
+        """Yield (object, opcode, payload) for each event received."""
+        data, anc, _, _ = self.sock.recvmsg(65536, socket.CMSG_SPACE(16 * 4))
+        if not data:
+            raise EOFError("compositor closed the connection")
+        for level, kind, fdata in anc:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                a = array.array("i")
+                a.frombytes(fdata[:len(fdata) - len(fdata) % a.itemsize])
+                self.fds += list(a)
+        self.buf += data
+        while len(self.buf) >= 8:
+            obj, word = struct.unpack_from("=II", self.buf)
+            size = word >> 16
+            if len(self.buf) < size:
+                break
+            payload, self.buf = self.buf[8:size], self.buf[size:]
+            yield obj, word & 0xFFFF, payload
+
+    def take_fd(self):
+        return self.fds.pop(0)
+
+
+def parse_string(p, off=0):
+    n = struct.unpack_from("=I", p, off)[0]
+    s = p[off + 4:off + 4 + n - 1].decode(errors="replace")
+    return s, off + 4 + n + (-n % 4)
+
+
+def main():
+    wl = Wayland()
+    registry = wl.new_id("wl_registry")
+    wl.send(1, 1, struct.pack("=I", registry))            # wl_display.get_registry
+    sync = wl.new_id("wl_callback")
+    wl.send(1, 0, struct.pack("=I", sync))                # wl_display.sync
+
+    device = None
+    connectors = {}       # object id -> {"name": ..}
+    device_done = False
+    lease = None
+    lease_fd = None
+    stage = "registry"
+
+    while True:
+        for obj, op, p in wl.read():
+            kind = wl.types.get(obj, "server")
+            if obj == 1 and op == 0:                       # wl_display.error
+                _, code = struct.unpack_from("=II", p)
+                msg, _ = parse_string(p, 8)
+                sys.exit(f"op9-desktop-lease: Wayland error {code}: {msg}")
+            if obj == registry and op == 0:                # wl_registry.global
+                name = struct.unpack_from("=I", p)[0]
+                iface, off = parse_string(p, 4)
+                if iface == "wp_drm_lease_device_v1" and device is None:
+                    device = wl.new_id("wp_drm_lease_device_v1")
+                    wl.send(registry, 0, struct.pack("=I", name) + Wayland.string(iface)
+                            + struct.pack("=II", 1, device))
+            elif obj == sync and op == 0 and stage == "registry":
+                if device is None:
+                    sys.exit("op9-desktop-lease: GNOME offers no DRM leases")
+                stage = "device"
+            elif kind == "wp_drm_lease_device_v1":
+                if op == 0:                                # drm_fd: not needed
+                    os.close(wl.take_fd())
+                elif op == 1:                              # connector(new_id)
+                    cid = struct.unpack_from("=I", p)[0]
+                    wl.types[cid] = "wp_drm_lease_connector_v1"
+                    connectors[cid] = {}
+                elif op == 2:                              # done
+                    device_done = True
+            elif kind == "wp_drm_lease_connector_v1":
+                if op == 0:
+                    connectors[obj]["name"] = parse_string(p)[0]
+                elif op == 4:                              # withdrawn
+                    connectors.pop(obj, None)
+            elif kind == "wp_drm_lease_v1":
+                if op == 0:                                # lease_fd
+                    lease_fd = wl.take_fd()
+                elif op == 1:                              # finished
+                    log("GNOME ended the lease")
+                    return 1
+
+        if device_done and lease is None:
+            mine = [c for c, v in connectors.items() if v.get("name") == CONNECTOR]
+            if not mine:
+                names = [v.get("name") for v in connectors.values()]
+                sys.exit(f"op9-desktop-lease: {CONNECTOR} isn't offered for lease (offered: {names})")
+            req = wl.new_id("wp_drm_lease_request_v1")
+            wl.send(device, 0, struct.pack("=I", req))       # create_lease_request
+            wl.send(req, 0, struct.pack("=I", mine[0]))      # request_connector
+            lease = wl.new_id("wp_drm_lease_v1")
+            wl.send(req, 1, struct.pack("=I", lease))        # submit
+            log("requested a lease on", CONNECTOR)
+
+        if lease_fd is not None:
+            break
+    # Keep the lease, and hand it to op9-desktop-input again whenever it restarts.
+    daemon = None
+    while True:
+        if daemon is None:
+            daemon = hand_over(lease_fd)
+        watch = [wl.sock] + ([daemon] if daemon else [])
+        r, _, _ = select.select(watch, [], [], 2.0)
+        if daemon and daemon in r and not daemon.recv(16):
+            log("op9-desktop-input went away")
+            daemon.close()
+            daemon = None
+        if wl.sock in r:
+            for obj, op, p in wl.read():
+                if wl.types.get(obj) == "wp_drm_lease_v1" and op == 1:
+                    log("GNOME ended the lease")
+                    return 1
+                if obj == 1 and op == 0:
+                    sys.exit("op9-desktop-lease: Wayland error")
+
+
+def hand_over(fd):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(DAEMON)
+        s.sendmsg([b"lease"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+    except OSError:
+        s.close()
+        return None          # not up yet: try again shortly
+    log("handed the", CONNECTOR, "lease to op9-desktop-input")
+    return s
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (EOFError, ConnectionError, FileNotFoundError) as e:
+        sys.exit(f"op9-desktop-lease: {e}")

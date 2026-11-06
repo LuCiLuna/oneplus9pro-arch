@@ -30,7 +30,7 @@ wiping the phone.
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz; the phone's own address is read from the modem at boot |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |
 | HDMI over USB-C | ✅ | With a USB-C to HDMI adapter. Two USB-C docks gave USB 3 but no display |
-| Desktop mode | 🟡 | Plugging in a display offers to open full GNOME on it. The phone screen works as a keyboard and trackpad, but doesn't draw them yet |
+| Desktop mode | 🟡 | Plugging in a display offers to open full GNOME on it, with the phone screen as a keyboard and trackpad that vibrate under your fingers. Docks and MST hubs don't work yet |
 | Charging | ✅ | USB-C PD, about 25 W, to stock's limits: stops at 100% and reports the battery full until unplugged. Plugging in wakes the phone, and it stays awake while charging so the temperature limits keep running |
 | Wireless charging | 🟡 | Slow: about 2 W, tested only on a phone's reverse charging. Works the same as USB otherwise; USB takes over if both are attached |
 | Charging status | ✅ | The screen lights up with a buzz when charging starts, and the lock screen shows the type and speed. fastfetch shows USB or Wireless Connected |
@@ -65,7 +65,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 144 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 145 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, the modem services and FEX |

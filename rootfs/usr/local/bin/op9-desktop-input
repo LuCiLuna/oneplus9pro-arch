@@ -224,10 +224,392 @@ def resolve(mode):
             (True, False): "trackpad", (True, True): "off"}[(kb, mouse)]
 
 
+
+# ---------------------------------------------------------------- panel
+# The phone screen comes as a DRM lease from GNOME (op9-desktop-lease hands it over through
+# DAEMON_SOCKET). Draw with cairo into two dumb buffers and flip between them.
+import ctypes as C
+import mmap
+import socket
+import array
+
+try:
+    import cairo
+except ImportError:            # still usable as a blind keyboard and trackpad
+    cairo = None
+
+DAEMON_SOCKET = "/run/op9-desktop-input.sock"
+DRM_FORMAT_XRGB8888 = 0x34325258
+ALLOW_MODESET = 0x400
+OBJ_CRTC, OBJ_CONNECTOR, OBJ_PLANE = 0xCCCCCCCC, 0xC0C0C0C0, 0xEEEEEEEE
+u32, u64 = C.c_uint32, C.c_uint64
+P = C.POINTER
+
+
+class ModeInfo(C.Structure):
+    _fields_ = [("clock", u32)] + [(n, C.c_uint16) for n in (
+        "hdisplay", "hsync_start", "hsync_end", "htotal", "hskew",
+        "vdisplay", "vsync_start", "vsync_end", "vtotal", "vscan")] + [
+        ("vrefresh", u32), ("flags", u32), ("type", u32), ("name", C.c_char * 32)]
+
+
+class Res(C.Structure):
+    _fields_ = [("count_fbs", C.c_int), ("fbs", P(u32)), ("count_crtcs", C.c_int), ("crtcs", P(u32)),
+                ("count_connectors", C.c_int), ("connectors", P(u32)),
+                ("count_encoders", C.c_int), ("encoders", P(u32)),
+                ("min_width", u32), ("max_width", u32), ("min_height", u32), ("max_height", u32)]
+
+
+class Connector(C.Structure):
+    _fields_ = [("connector_id", u32), ("encoder_id", u32), ("connector_type", u32),
+                ("connector_type_id", u32), ("connection", C.c_int), ("mmWidth", u32),
+                ("mmHeight", u32), ("subpixel", C.c_int), ("count_modes", C.c_int),
+                ("modes", P(ModeInfo)), ("count_props", C.c_int), ("props", P(u32)),
+                ("prop_values", P(u64)), ("count_encoders", C.c_int), ("encoders", P(u32))]
+
+
+class PlaneRes(C.Structure):
+    _fields_ = [("count_planes", u32), ("planes", P(u32))]
+
+
+class ObjProps(C.Structure):
+    _fields_ = [("count_props", u32), ("props", P(u32)), ("prop_values", P(u64))]
+
+
+class PropRes(C.Structure):
+    _fields_ = [("prop_id", u32), ("flags", u32), ("name", C.c_char * 32)]
+
+
+_drm = None
+
+
+def libdrm():
+    global _drm
+    if _drm is None:
+        d = C.CDLL("libdrm.so.2", use_errno=True)
+        for f, r in (("drmModeGetResources", P(Res)), ("drmModeGetConnector", P(Connector)),
+                     ("drmModeGetPlaneResources", P(PlaneRes)), ("drmModeObjectGetProperties", P(ObjProps)),
+                     ("drmModeGetProperty", P(PropRes)), ("drmModeAtomicAlloc", C.c_void_p)):
+            getattr(d, f).restype = r
+        d.drmModeAtomicAddProperty.argtypes = [C.c_void_p, u32, u32, u64]
+        d.drmModeAtomicCommit.argtypes = [C.c_int, C.c_void_p, u32, C.c_void_p]
+        d.drmModeAtomicFree.argtypes = [C.c_void_p]
+        d.drmModeCreateDumbBuffer.argtypes = [C.c_int, u32, u32, u32, u32, P(u32), P(u32), P(u64)]
+        d.drmModeMapDumbBuffer.argtypes = [C.c_int, u32, P(u64)]
+        d.drmModeAddFB2.argtypes = [C.c_int, u32, u32, u32, P(u32), P(u32), P(u32), P(u32), u32]
+        d.drmModeCreatePropertyBlob.argtypes = [C.c_int, C.c_void_p, C.c_size_t, P(u32)]
+        _drm = d
+    return _drm
+
+
+def obj_props(fd, obj, kind):
+    d = libdrm()
+    pr = d.drmModeObjectGetProperties(fd, obj, kind)
+    if not pr:
+        raise OSError(C.get_errno(), f"no properties on object {obj}")
+    out = {}
+    for j in range(pr.contents.count_props):
+        p = d.drmModeGetProperty(fd, pr.contents.props[j])
+        out[p.contents.name.decode()] = (p.contents.prop_id, pr.contents.prop_values[j])
+        d.drmModeFreeProperty(p)
+    d.drmModeFreeObjectProperties(pr)
+    return out
+
+
+class Panel:
+    """The leased phone screen: one connector, one CRTC, its primary plane."""
+
+    def __init__(self, fd):
+        d = libdrm()
+        self.fd = fd
+        if d.drmSetClientCap(fd, 2, 1) or d.drmSetClientCap(fd, 3, 1):
+            raise OSError(C.get_errno(), "atomic modesetting not available on the lease")
+        res = d.drmModeGetResources(fd)
+        if not res or res.contents.count_crtcs < 1 or res.contents.count_connectors < 1:
+            raise OSError(C.get_errno(), "the lease has no CRTC or connector")
+        self.crtc = res.contents.crtcs[0]
+        self.conn = res.contents.connectors[0]
+        d.drmModeFreeResources(res)
+        c = d.drmModeGetConnector(fd, self.conn)
+        modes = [ModeInfo.from_buffer_copy(bytes(c.contents.modes[i])) for i in range(c.contents.count_modes)]
+        d.drmModeFreeConnector(c)
+        widest = max(m.hdisplay for m in modes)
+        full = [m for m in modes if m.hdisplay == widest]
+        # a still picture: 60 Hz is plenty, and draws less power than 120
+        self.mode = next((m for m in full if m.vrefresh == 60), min(full, key=lambda m: m.vrefresh))
+        self.w, self.h = self.mode.hdisplay, self.mode.vdisplay
+
+        pres = d.drmModeGetPlaneResources(fd)
+        self.plane = None
+        for i in range(pres.contents.count_planes):
+            pl = pres.contents.planes[i]
+            if obj_props(fd, pl, OBJ_PLANE).get("type", (0, 0))[1] == 1:   # primary
+                self.plane = pl
+        d.drmModeFreePlaneResources(pres)
+        if self.plane is None:
+            raise OSError(0, "the lease has no primary plane")
+        self.pp = {k: v[0] for k, v in obj_props(fd, self.plane, OBJ_PLANE).items()}
+        self.cp = {k: v[0] for k, v in obj_props(fd, self.crtc, OBJ_CRTC).items()}
+        self.np = {k: v[0] for k, v in obj_props(fd, self.conn, OBJ_CONNECTOR).items()}
+        blob = u32()
+        if d.drmModeCreatePropertyBlob(fd, C.byref(self.mode), C.sizeof(ModeInfo), C.byref(blob)):
+            raise OSError(C.get_errno(), "can't make a mode blob")
+        self.blob = blob.value
+
+        self.bufs = []
+        for _ in range(2):
+            handle, pitch, size, offset, fb = u32(), u32(), u64(), u64(), u32()
+            if d.drmModeCreateDumbBuffer(fd, self.w, self.h, 32, 0, C.byref(handle), C.byref(pitch), C.byref(size)):
+                raise OSError(C.get_errno(), "can't allocate a buffer")
+            if d.drmModeMapDumbBuffer(fd, handle, C.byref(offset)):
+                raise OSError(C.get_errno(), "can't map a buffer")
+            mm = mmap.mmap(fd, size.value, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=offset.value)
+            if d.drmModeAddFB2(fd, self.w, self.h, DRM_FORMAT_XRGB8888, (u32 * 4)(handle, 0, 0, 0),
+                               (u32 * 4)(pitch, 0, 0, 0), (u32 * 4)(0, 0, 0, 0), C.byref(fb), 0):
+                raise OSError(C.get_errno(), "can't add a framebuffer")
+            self.bufs.append({"fb": fb.value, "mm": mm, "pitch": pitch.value})
+        self.pitch = self.bufs[0]["pitch"]
+        self.back = 0
+        self.on = False
+        log(f"phone screen leased: {self.w}x{self.h}@{self.mode.vrefresh}")
+
+    def _commit(self, props, flags):
+        d = libdrm()
+        req = d.drmModeAtomicAlloc()
+        for obj, prop, val in props:
+            d.drmModeAtomicAddProperty(req, obj, prop, val)
+        ret = d.drmModeAtomicCommit(self.fd, req, flags, None)
+        err = C.get_errno()
+        d.drmModeAtomicFree(req)
+        if ret:
+            raise OSError(err, os.strerror(err))
+
+    def flip(self):
+        """Show the back buffer."""
+        fb = self.bufs[self.back]["fb"]
+        pl, pp = self.plane, self.pp
+        props = [(pl, pp["FB_ID"], fb), (pl, pp["CRTC_ID"], self.crtc)]
+        flags = 0
+        if not self.on:
+            props += [(self.conn, self.np["CRTC_ID"], self.crtc),
+                      (self.crtc, self.cp["MODE_ID"], self.blob), (self.crtc, self.cp["ACTIVE"], 1),
+                      (pl, pp["SRC_X"], 0), (pl, pp["SRC_Y"], 0),
+                      (pl, pp["SRC_W"], self.w << 16), (pl, pp["SRC_H"], self.h << 16),
+                      (pl, pp["CRTC_X"], 0), (pl, pp["CRTC_Y"], 0),
+                      (pl, pp["CRTC_W"], self.w), (pl, pp["CRTC_H"], self.h)]
+            flags = ALLOW_MODESET
+        self._commit(props, flags)
+        self.on = True
+        self.back ^= 1
+
+    def off(self):
+        if not self.on:
+            return
+        pl, pp = self.plane, self.pp
+        self._commit([(pl, pp["FB_ID"], 0), (pl, pp["CRTC_ID"], 0),
+                      (self.crtc, self.cp["ACTIVE"], 0), (self.crtc, self.cp["MODE_ID"], 0),
+                      (self.conn, self.np["CRTC_ID"], 0)], ALLOW_MODESET)
+        self.on = False
+
+    def close(self):
+        for b in self.bufs:
+            b["mm"].close()
+        os.close(self.fd)
+
+
+def brighten():
+    """GNOME leaves the leased panel's backlight wherever Phosh had it, often near the
+    bottom: make sure the keys can be seen."""
+    for b in glob.glob("/sys/class/backlight/*dsi*/brightness"):
+        try:
+            with open(b) as f:
+                cur = int(f.read())
+            with open(os.path.join(os.path.dirname(b), "max_brightness")) as f:
+                top = int(f.read())
+            if cur < top // 4:
+                with open(b, "w") as f:
+                    f.write(str(top * 2 // 5))
+        except (OSError, ValueError):
+            pass
+
+
+BG = (0, 0, 0)
+KEY = (0.17, 0.17, 0.19)
+MOD = (0.12, 0.12, 0.14)
+PRESSED = (0.21, 0.52, 0.89)
+LABEL = (0.93, 0.93, 0.94)
+PAD = (0.075, 0.075, 0.09)
+PAD_EDGE = (0.2, 0.2, 0.23)
+HINT = (0.28, 0.28, 0.31)
+ARROWS = {"Up": 0, "Right": 1, "Down": 2, "Left": 3}
+
+
+def rounded(ctx, x, y, w, h, r):
+    ctx.new_sub_path()
+    ctx.arc(x + w - r, y + r, r, -1.5708, 0)
+    ctx.arc(x + w - r, y + h - r, r, 0, 1.5708)
+    ctx.arc(x + r, y + h - r, r, 1.5708, 3.1416)
+    ctx.arc(x + r, y + r, r, 3.1416, 4.7124)
+    ctx.close_path()
+
+
+def draw_layout(ctx, regions, pressed):
+    for r in regions:
+        if r.kind == "pad":
+            m = 18
+            rounded(ctx, r.x + m, r.y + m, r.w - 2 * m, r.h - 2 * m, 40)
+            ctx.set_source_rgb(*PAD)
+            ctx.fill_preserve()
+            ctx.set_source_rgb(*PAD_EDGE)
+            ctx.set_line_width(3)
+            ctx.stroke()
+            ctx.select_font_face("Adwaita Sans")
+            ctx.set_font_size(r.h * 0.09 if r.h < 800 else 70)
+            text = "Trackpad"
+            e = ctx.text_extents(text)
+            ctx.set_source_rgb(*HINT)
+            ctx.move_to(r.x + (r.w - e.width) / 2 - e.x_bearing, r.y + r.h - m - 28 - e.height - e.y_bearing)
+            ctx.show_text(text)
+            continue
+        inset = min(r.w, r.h) * 0.06
+        x, y, w, h = r.x + inset, r.y + inset, r.w - 2 * inset, r.h - 2 * inset
+        rounded(ctx, x, y, w, h, min(w, h) * 0.16)
+        ctx.set_source_rgb(*(PRESSED if pressed else (KEY if len(r.label) == 1 else MOD)))
+        ctx.fill()
+        ctx.set_source_rgb(*LABEL)
+        if r.label in ARROWS:
+            s = min(w, h) * 0.18
+            ctx.save()
+            ctx.translate(x + w / 2, y + h / 2)
+            ctx.rotate(ARROWS[r.label] * 1.5708)
+            ctx.move_to(0, -s)
+            ctx.line_to(s, s * 0.7)
+            ctx.line_to(-s, s * 0.7)
+            ctx.close_path()
+            ctx.fill()
+            ctx.restore()
+            continue
+        ctx.select_font_face("Adwaita Sans", 0, 1 if len(r.label) == 1 else 0)
+        size = h * (0.42 if len(r.label) == 1 else 0.27)
+        ctx.set_font_size(size)
+        e = ctx.text_extents(r.label)
+        if e.width > w * 0.86:
+            ctx.set_font_size(size * w * 0.86 / e.width)
+            e = ctx.text_extents(r.label)
+        ctx.move_to(x + (w - e.width) / 2 - e.x_bearing, y + (h - e.height) / 2 - e.y_bearing)
+        ctx.show_text(r.label)
+
+
+class Painter:
+    """Draws a layout onto the leased panel, in landscape, and lights up pressed keys."""
+
+    def __init__(self, panel, flip, tx_max, ty_max):
+        self.panel = panel
+        if flip:   # landscape (lx, ly) -> panel (ly, ty_max - lx)
+            self.m = cairo.Matrix(0, -1, 1, 0, 0, ty_max)
+        else:      # landscape (lx, ly) -> panel (tx_max - ly, lx)
+            self.m = cairo.Matrix(0, 1, -1, 0, tx_max, 0)
+        self.regions = None
+        self.shown = None
+
+    def _surface(self, data):
+        return cairo.ImageSurface.create_for_data(data, cairo.FORMAT_RGB24, self.panel.w, self.panel.h, self.panel.pitch)
+
+    def set_layout(self, regions):
+        self.regions = regions
+        self.shown = None
+        if not regions:
+            self.panel.off()
+            return
+        size = self.panel.pitch * self.panel.h
+        self.base, self.lit = bytearray(size), bytearray(size)
+        for data, pressed in ((self.base, False), (self.lit, True)):
+            surf = self._surface(data)
+            ctx = cairo.Context(surf)
+            ctx.set_source_rgb(*BG)
+            ctx.paint()
+            ctx.set_matrix(self.m)
+            draw_layout(ctx, regions, pressed)
+            surf.flush()
+        self.lit_surface = self._surface(self.lit)
+        brighten()
+        self.show(set())
+
+    def show(self, pressed):
+        if not self.regions or pressed == self.shown:
+            return
+        buf = self.panel.bufs[self.panel.back]
+        n = len(self.base)
+        buf["mm"][:n] = self.base
+        keys = [r for r in self.regions if id(r) in pressed]
+        if keys:
+            surf = self._surface(buf["mm"])
+            ctx = cairo.Context(surf)
+            ctx.set_matrix(self.m)
+            for r in keys:
+                ctx.rectangle(r.x, r.y, r.w, r.h)
+            ctx.identity_matrix()
+            ctx.set_source_surface(self.lit_surface, 0, 0)
+            ctx.fill()
+            surf.flush()
+            del ctx, surf
+        self.panel.flip()
+        self.shown = set(pressed)
+
+
+
+# ---------------------------------------------------------------- haptics
+EV_FF, FF_RUMBLE = 0x15, 0x50
+EVIOCSFF = 0x40304580          # _IOW('E', 0x80, struct ff_effect), 48 bytes on arm64
+
+
+class Haptics:
+    """Ticks from the vibration motor (aw8697): keys, trackpad clicks, and a faint ripple
+    under a finger moving on the trackpad. Full scale is the motor's normal strength."""
+
+    EFFECTS = {"key": (24, 0xFFFF), "click": (10, 0x9000), "ripple": (6, 0x4800)}
+
+    def __init__(self):
+        self.fd = None
+        self.ids = {}
+        for ev in sorted(glob.glob("/sys/class/input/event*")):
+            if not has(bits(ev + "/device/capabilities/ff"), FF_RUMBLE):
+                continue
+            try:
+                fd = os.open("/dev/input/" + os.path.basename(ev), os.O_RDWR | os.O_CLOEXEC)
+                for name, (length_ms, strength) in self.EFFECTS.items():
+                    # struct ff_effect: type, id (-1: new), direction, trigger, replay, the union
+                    eff = bytearray(struct.pack("=HhHHHHH", FF_RUMBLE, -1, 0, 0, 0, length_ms, 0)
+                                    + b"\0\0" + struct.pack("=HH", strength, strength) + bytes(28))
+                    fcntl.ioctl(fd, EVIOCSFF, eff)
+                    self.ids[name] = struct.unpack_from("=h", eff, 2)[0]
+                self.fd = fd
+                log("vibration on", os.path.basename(ev))
+                return
+            except OSError as e:
+                log("no vibration:", e)
+
+    def play(self, name):
+        if self.fd is not None:
+            try:
+                os.write(self.fd, EVENT.pack(0, 0, EV_FF, self.ids[name], 1))
+            except OSError:
+                pass
+
+    def tick(self):
+        self.play("key")
+
+
+RIPPLE_MM = 3.0        # one ripple tick per this much finger travel on the trackpad
+RIPPLE_GAP = 0.028     # but no more often than this (seconds)
+TAP_TIME = 0.22        # a touch shorter than this...
+TAP_MM = 1.5           # ...that moved less than this is a tap: libinput clicks on it
+
+
 # ---------------------------------------------------------------- daemon
 class Daemon:
-    def __init__(self, config_path, flip):
-        self.config_path, self.flip = config_path, flip
+    def __init__(self, config_path, flip, uid):
+        self.config_path, self.flip, self.uid = config_path, flip, uid
         node = find_touchscreen()
         if not node:
             sys.exit("op9-desktop-input: no touchscreen")
@@ -252,6 +634,22 @@ class Daemon:
         self.wanted = None
         self.mode = None
         self.regions = []
+        self.panel = None
+        self.painter = None
+        self.haptics = Haptics()
+        self.lease_conn = None
+        self.pad_track = {}       # slot -> start and travel, for ripples and taps
+        self.tap_ok = False
+        self.ripple_at = 0
+        try:
+            os.unlink(DAEMON_SOCKET)
+        except FileNotFoundError:
+            pass
+        self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+        self.srv.bind(DAEMON_SOCKET)
+        os.chown(DAEMON_SOCKET, uid, -1)
+        os.chmod(DAEMON_SOCKET, 0o600)
+        self.srv.listen(2)
 
     # -- mode
     def read_wanted(self):
@@ -278,8 +676,9 @@ class Daemon:
             self.pad.close()
             self.pad = None
         if pads:
-            p = pads[0]
-            w, h = int(p.w), int(p.h)
+            # The virtual trackpad spans the whole screen: a touch has to start on the trackpad,
+            # but keeps moving the pointer anywhere until it lifts, over the keys too.
+            w, h = self.W, self.H
             ax = {ABS_X: (0, w - 1, self.res), ABS_Y: (0, h - 1, self.res),
                   ABS_MT_SLOT: (0, len(self.slots) - 1, 0), ABS_MT_TRACKING_ID: (0, 65535, 0),
                   ABS_MT_POSITION_X: (0, w - 1, self.res), ABS_MT_POSITION_Y: (0, h - 1, self.res)}
@@ -287,6 +686,59 @@ class Daemon:
                               keys=(BTN_TOUCH, BTN_TOOL_FINGER, BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP,
                                     BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP))
         log(f"phone screen: {mode}" + (f" (auto from {self.wanted})" if self.wanted not in MODES else ""))
+        self.paint(layout_changed=True)
+
+    # -- the leased panel
+    def accept_lease(self):
+        conn, _ = self.srv.accept()
+        pid, uid, gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if uid != self.uid:
+            log(f"refused a lease from uid {uid}")
+            conn.close()
+            return
+        msg, anc, _, _ = conn.recvmsg(16, socket.CMSG_SPACE(4))
+        fds = [f for level, kind, data in anc if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS
+               for f in array.array("i", data[:4])]
+        if not fds:
+            conn.close()
+            return
+        # keep the connection: op9-desktop-lease hands the lease over again if this restarts
+        if self.lease_conn:
+            self.lease_conn.close()
+        self.lease_conn = conn
+        self.drop_panel()
+        if cairo is None:
+            log("python-cairo is missing: the phone screen stays dark")
+            os.close(fds[0])
+            return
+        try:
+            self.panel = Panel(fds[0])
+            self.painter = Painter(self.panel, self.flip, self.tx, self.ty)
+        except OSError as e:
+            log("can't use the phone screen lease:", e)
+            self.drop_panel()
+            return
+        self.paint(layout_changed=True)
+
+    def drop_panel(self):
+        if self.panel:
+            try:
+                self.panel.close()
+            except OSError:
+                pass
+        self.panel = self.painter = None
+
+    def paint(self, layout_changed=False):
+        if not self.painter:
+            return
+        try:
+            if layout_changed:
+                self.painter.set_layout(self.regions)
+            else:
+                self.painter.show({id(r) for r in self.contacts.values() if r.kind == "key"})
+        except OSError as e:
+            log("lost the phone screen:", e)
+            self.drop_panel()
 
     # -- touches
     def landscape(self, x, y):
@@ -336,7 +788,9 @@ class Daemon:
                     self.contacts[i] = region
                     if region.kind == "key":
                         key_events.append((EV_KEY, region.code, 1))
+                        self.haptics.tick()
                     else:
+                        self.pad_feel_down(i, lx, ly)
                         pad_events += self.pad_touch(i, region, lx, ly, True)
             elif i in self.contacts:
                 region = self.contacts[i]
@@ -346,16 +800,52 @@ class Daemon:
                         key_events.append((EV_KEY, region.code, 0))
                     else:
                         pad_events += [(EV_ABS, ABS_MT_SLOT, i), (EV_ABS, ABS_MT_TRACKING_ID, -1)]
+                        self.pad_feel_up(i)
                 elif region.kind == "pad":
+                    self.pad_feel_move(i, lx, ly)
                     pad_events += self.pad_touch(i, region, lx, ly, False)
             s["new"] = s["moved"] = s["gone"] = False
         self.kbd.emit(key_events)
         if pad_events and self.pad:
             self.pad.emit(pad_events + self.pad_summary())
+        if key_events:
+            self.paint()
+
+    # -- how the trackpad feels
+    def pad_feel_down(self, i, lx, ly):
+        now = time.monotonic()
+        if not self.pad_track:
+            self.tap_ok, self.tap_start = True, now
+        self.pad_track[i] = {"x0": lx, "y0": ly, "x": lx, "y": ly, "travel": 0.0}
+
+    def pad_feel_move(self, i, lx, ly):
+        t = self.pad_track.get(i)
+        if not t:
+            return
+        step = ((lx - t["x"]) ** 2 + (ly - t["y"]) ** 2) ** 0.5 / self.res
+        t["x"], t["y"] = lx, ly
+        if ((lx - t["x0"]) ** 2 + (ly - t["y0"]) ** 2) ** 0.5 / self.res > TAP_MM:
+            self.tap_ok = False
+        if i != min(self.pad_track):          # ripple for one finger, not one per finger
+            return
+        t["travel"] += step
+        now = time.monotonic()
+        if t["travel"] >= RIPPLE_MM and now - self.ripple_at >= RIPPLE_GAP:
+            t["travel"] = 0.0
+            self.ripple_at = now
+            self.haptics.play("ripple")
+
+    def pad_feel_up(self, i):
+        self.pad_track.pop(i, None)
+        if self.pad_track:
+            return
+        if self.tap_ok and time.monotonic() - self.tap_start < TAP_TIME:
+            self.haptics.play("click")
+        self.tap_ok = False
 
     def pad_touch(self, i, r, lx, ly, new):
-        x = min(max(int(lx - r.x), 0), int(r.w) - 1)
-        y = min(max(int(ly - r.y), 0), int(r.h) - 1)
+        x = min(max(int(lx), 0), self.W - 1)
+        y = min(max(int(ly), 0), self.H - 1)
         ev = [(EV_ABS, ABS_MT_SLOT, i)]
         if new:
             ev.append((EV_ABS, ABS_MT_TRACKING_ID, self.next_id))
@@ -371,10 +861,9 @@ class Daemon:
             ev.append((EV_KEY, btn, int(n == count or (count == 5 and n > 5))))
         if on:
             s = self.slots[on[0]]
-            r = self.contacts[on[0]]
             lx, ly = self.landscape(s["x"], s["y"])
-            ev += [(EV_ABS, ABS_X, min(max(int(lx - r.x), 0), int(r.w) - 1)),
-                   (EV_ABS, ABS_Y, min(max(int(ly - r.y), 0), int(r.h) - 1))]
+            ev += [(EV_ABS, ABS_X, min(max(int(lx), 0), self.W - 1)),
+                   (EV_ABS, ABS_Y, min(max(int(ly), 0), self.H - 1))]
         return ev
 
     def release_all(self):
@@ -388,21 +877,30 @@ class Daemon:
             self.contacts = {}
             self.pad.emit(ev + self.pad_summary())
         self.contacts = {}
+        self.pad_track = {}
+        self.tap_ok = False
 
     def run(self):
         signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
         try:
             checked = 0
             while True:
-                r, _, _ = select.select([self.ts], [], [], 1.0)
-                if r:
+                r, _, _ = select.select([self.ts, self.srv], [], [], 1.0)
+                if self.ts in r:
                     self.read_touch()
+                if self.srv in r:
+                    self.accept_lease()
                 now = time.monotonic()
                 if now - checked >= 1:
                     checked = now
                     self.update_mode()
         finally:
             self.release_all()
+            self.drop_panel()
+            try:
+                os.unlink(DAEMON_SOCKET)
+            except OSError:
+                pass
 
 
 def main():
@@ -411,7 +909,7 @@ def main():
     if "--uid" in args:
         uid = int(args[args.index("--uid") + 1])
     home = pwd.getpwuid(uid).pw_dir
-    Daemon(os.path.join(home, ".config", "op9-desktop", "config.json"), "--flip" in args).run()
+    Daemon(os.path.join(home, ".config", "op9-desktop", "config.json"), "--flip" in args, uid).run()
 
 
 if __name__ == "__main__":

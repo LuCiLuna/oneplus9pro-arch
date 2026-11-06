@@ -12,7 +12,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GUdev", "1.0")
-from gi.repository import Adw, GLib, Gtk, GUdev
+from gi.repository import Adw, Gio, GLib, Gtk, GUdev
 
 CONFIG = os.path.join(GLib.get_user_config_dir(), "op9-desktop", "config.json")
 MONITORS_XML = os.path.join(GLib.get_user_config_dir(), "monitors.xml")
@@ -51,6 +51,62 @@ def save_config(c):
     with open(CONFIG + ".tmp", "w") as f:
         json.dump(c, f)
     os.replace(CONFIG + ".tmp", CONFIG)
+
+
+
+# Settings Phosh and desktop mode want differently. Both sessions share the user's settings,
+# so each side saves the other's values when it starts and puts back its own.
+#   screen-keyboard-enabled: Phosh's on-screen keyboard needs it; in GNOME it pops a keyboard
+#     up on the TV for every text field.
+#   button-layout: phone apps fill the screen and need no buttons; desktop windows do.
+SWAPPED = {
+    ("org.gnome.desktop.a11y.applications", "screen-keyboard-enabled"): "false",
+    ("org.gnome.desktop.wm.preferences", "button-layout"): "'appmenu:minimize,maximize,close'",
+}
+
+
+def read_settings():
+    out = {}
+    for (schema, key) in SWAPPED:
+        out[f"{schema} {key}"] = Gio.Settings.new(schema).get_value(key).print_(True)
+    return out
+
+
+def apply_settings(values):
+    for name, text in values.items():
+        schema, key = name.split(" ", 1)
+        try:
+            Gio.Settings.new(schema).set_value(key, GLib.Variant.parse(None, text, None, None))
+        except GLib.Error as e:
+            log("couldn't set", name, e.message)
+    Gio.Settings.sync()
+
+
+def switch_settings(side):
+    """Save the other side's values of SWAPPED and apply this side's."""
+    config = load_config()
+    raw = load_raw_config()
+    if raw.get("active") == side:
+        return
+    other = "phone" if side == "desktop" else "desktop"
+    raw[other + "_settings"] = read_settings()
+    mine = raw.get(side + "_settings")
+    if mine is None and side == "desktop":
+        mine = {f"{s} {k}": v for (s, k), v in SWAPPED.items()}
+    if mine:
+        apply_settings(mine)
+    raw["active"] = side
+    raw.update(config)
+    save_config(raw)
+    log("settings for", side, "mode applied")
+
+
+def load_raw_config():
+    try:
+        with open(CONFIG) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 def external_connected():
@@ -114,8 +170,9 @@ def spec_key(spec):
 
 
 def write_monitors_xml(connected):
-    """Give GNOME a stored layout for these displays with the phone screen disabled, so it
-    starts that way instead of showing up on the phone screen first."""
+    """Give GNOME a stored layout for these displays with the phone screen offered for lease,
+    so it starts that way instead of showing up on the phone screen first, and
+    op9-desktop-input can draw the keyboard and trackpad there."""
     panel = (PHONE_PANEL, "unknown", "unknown", "unknown")
     ext = []
     for name in connected:
@@ -131,8 +188,8 @@ def write_monitors_xml(connected):
         root = ET.Element("monitors", version="2")
     for conf in root.findall("configuration"):
         if {spec_key(s) for s in conf.iter("monitorspec")} == key:
-            if any(spec_key(s) == panel for s in conf.findall("disabled/monitorspec")):
-                return  # already has the phone screen off (maybe tuned in Settings): keep it
+            if any(spec_key(s) == panel for s in conf.findall("forlease/monitorspec")):
+                return  # already leases the phone screen (maybe tuned in Settings): keep it
             root.remove(conf)
     conf = ET.SubElement(root, "configuration")
     ET.SubElement(conf, "layoutmode").text = "logical"
@@ -151,12 +208,12 @@ def write_monitors_xml(connected):
         ET.SubElement(mode, "height").text = str(h)
         ET.SubElement(mode, "rate").text = "%.3f" % rate
         x += w
-    spec_xml(ET.SubElement(conf, "disabled"), panel)
+    spec_xml(ET.SubElement(conf, "forlease"), panel)
     ET.indent(root)
     os.makedirs(os.path.dirname(MONITORS_XML), exist_ok=True)
     ET.ElementTree(root).write(MONITORS_XML + ".tmp", encoding="unicode")
     os.replace(MONITORS_XML + ".tmp", MONITORS_XML)
-    log("stored a layout for", ", ".join(i[0] for i, _ in ext), "with the phone screen off")
+    log("stored a layout for", ", ".join(i[0] for i, _ in ext), "with the phone screen for lease")
 
 
 def start_unit(unit):
@@ -243,6 +300,7 @@ class PhoneSide:
     def __init__(self, app):
         self.app = app
         self.chooser = None
+        switch_settings("phone")
         self.watch = DisplayWatch(self.changed)
         if self.watch.state or "--chooser" in sys.argv:
             GLib.timeout_add_seconds(3, lambda: self.changed(self.watch.state or ["test"]) and False)
@@ -272,7 +330,8 @@ class PhoneSide:
         self.start(mode, remember)
 
     def start(self, mode, remember):
-        config = load_config()
+        config = load_raw_config()
+        config.update(load_config())
         config["mode"] = mode
         if remember:
             config["ask"] = False
@@ -291,8 +350,10 @@ class DesktopSide:
 
     def __init__(self, app):
         self.app = app
+        switch_settings("desktop")
         self.mode = load_config()["mode"]
         self.seen = False
+        self.lease = None
         self.watch = DisplayWatch(self.changed)
         self.leaving = None
         if self.watch.state:
@@ -334,6 +395,7 @@ class DesktopSide:
         for i, name in enumerate(connected):
             args += ["--logical-monitor"] + (["--primary"] if i == 0 else ["--right-of", connected[i - 1]])
             args += ["--monitor", name]
+        args += ["--for-lease-monitor", PHONE_PANEL]
         r = subprocess.run(args, capture_output=True, text=True)
         if r.returncode != 0:
             if tries < 15:
@@ -341,6 +403,20 @@ class DesktopSide:
                 GLib.timeout_add_seconds(2, lambda: self.apply_mode(external_connected(), tries + 1) and False)
                 return
             log("gdctl gave up:", r.stderr.strip())
+        self.start_lease()
+
+    def start_lease(self):
+        """Lease the phone screen from GNOME for op9-desktop-input to draw on. The lease lasts
+        as long as op9-desktop-lease runs; start it again if it ends."""
+        if self.lease and self.lease.poll() is None:
+            return
+        self.lease = subprocess.Popen(["/usr/local/bin/op9-desktop-lease"])
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, self.lease.pid, self.lease_ended)
+
+    def lease_ended(self, pid, status):
+        log("phone screen lease ended, status", status)
+        if self.seen and not self.leaving and external_connected():
+            GLib.timeout_add_seconds(3, lambda: self.start_lease() and False)
 
 
 class App(Adw.Application):

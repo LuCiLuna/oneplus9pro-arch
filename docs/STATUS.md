@@ -119,7 +119,19 @@ off, held in landscape with its top to the left. Automatic picks one from the US
 keyboards and mice attached (a mouse's extra "keyboard" interface doesn't count).
 `op9-desktop-input` grabs the touchscreen and feeds a virtual multi-touch touchpad, so libinput
 gives it tap-to-click, two-finger scrolling and gestures, and a virtual keyboard where each finger
-holds its key. The panel stays dark for now: the keys aren't drawn yet.
+holds its key. It draws the layout on the panel in a dark style, and pressed keys light up. A touch
+that starts on the trackpad keeps moving the pointer over the whole screen until it lifts, the keys
+included. The vibration motor ticks for each key, gives a softer tick when a tap counts as a click,
+and a faint ripple every 3 mm a finger travels on the trackpad.
+
+- The panel is a DRM lease: GNOME's `monitors.xml` and `gdctl` offer it for lease, and
+  `op9-desktop-lease` takes the lease over Wayland (`wp_drm_lease_v1`) and hands its file descriptor
+  to `op9-desktop-input`. It hands it over again if the daemon restarts.
+- Phosh and GNOME share the user's settings, so desktop mode keeps its own on-screen keyboard and
+  window-button settings: each side saves the other's values when it starts. Otherwise GNOME pops
+  up a keyboard on the TV for every text field, or Phosh's keyboard stays hidden.
+- Patch 0145 makes the haptics driver play each effect at its strength; before it, every vibration
+  was the same.
 
 - `op9-desktop` is both the chooser under Phosh and the helper under GNOME. It writes GNOME's
   `monitors.xml` from the display's EDID before starting, so GNOME never opens on the phone first.
@@ -128,8 +140,8 @@ holds its key. The panel stays dark for now: the keys aren't drawn yet.
 - Patch 0144 keeps DP off the mixers and CTL the panel needs. Without it, the panel came back on
   other blocks after desktop mode and never drew a frame until a reboot.
 - GNOME scans out linear buffers: 10-bit UBWC-compressed ones showed black on DP.
-- Not done yet: drawing the keyboard and trackpad on the panel, key vibration, docks (see Known
-  problems) and MST.
+- Not done yet: docks (see Known problems) and MST hubs. The haptics driver uses the motor's
+  continuous mode only; the chip's waveform modes would give crisper clicks.
 
 ## Fingerprint reader
 
