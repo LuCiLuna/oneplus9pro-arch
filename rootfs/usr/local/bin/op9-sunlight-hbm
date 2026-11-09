@@ -1,0 +1,61 @@
+#!/bin/bash
+# Switch the panel into high-brightness mode in bright light and out again,
+# like stock's automatic brightness. The light sensor comes from
+# iio-sensor-proxy; the panel driver keeps HBM off while the screen is dark.
+#
+# Thresholds in lux, and how long a reading must hold before switching.
+ON_LUX=${ON_LUX:-10000}
+OFF_LUX=${OFF_LUX:-4000}
+HOLD=${HOLD:-3}
+
+hbm=$(echo /sys/class/backlight/*/device/hbm)
+[ -w "$hbm" ] || { echo "no panel hbm attribute" >&2; exit 1; }
+
+state=0
+pending=0
+since=$SECONDS
+lux=0
+
+set_hbm() {
+	echo "$1" > "$hbm" && state=$1 && echo "high-brightness mode $1 at $lux lux"
+}
+
+trap 'echo 0 > "$hbm"' EXIT
+trap 'exit 0' TERM INT
+echo 0 > "$hbm"
+
+exec 3< <(stdbuf -oL monitor-sensor --light)
+
+while :; do
+	# "=== Has ambient light sensor (value: 2.5, unit: lux)" at start, then
+	# "    Light changed: 7.081000 (lux)"; a 1 s timeout keeps the clock going
+	if read -r -t 1 line <&3; then
+		case $line in
+		*"Light changed: "*) v=${line#*Light changed: } ;;
+		*"value: "*) v=${line#*value: } ;;
+		*) v= ;;
+		esac
+		if [ -n "$v" ]; then
+			lux=${v%%[!0-9]*}
+			lux=${lux:-0}
+		fi
+	elif [ $? -le 128 ]; then
+		exit 1	# monitor-sensor went away; systemd restarts us
+	fi
+
+	want=$state
+	if [ "$state" = 0 ] && [ "$lux" -ge "$ON_LUX" ]; then
+		want=1
+	elif [ "$state" = 1 ] && [ "$lux" -lt "$OFF_LUX" ]; then
+		want=0
+	fi
+
+	if [ "$want" = "$state" ]; then
+		pending=$state
+	elif [ "$want" != "$pending" ]; then
+		pending=$want
+		since=$SECONDS
+	elif [ $((SECONDS - since)) -ge "$HOLD" ]; then
+		set_hbm "$want"
+	fi
+done

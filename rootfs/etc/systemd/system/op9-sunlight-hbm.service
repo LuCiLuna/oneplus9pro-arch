@@ -1,0 +1,12 @@
+[Unit]
+Description=Raise the panel to high-brightness mode in bright light
+Wants=iio-sensor-proxy.service
+After=iio-sensor-proxy.service
+
+[Service]
+ExecStart=/usr/local/bin/op9-sunlight-hbm
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
