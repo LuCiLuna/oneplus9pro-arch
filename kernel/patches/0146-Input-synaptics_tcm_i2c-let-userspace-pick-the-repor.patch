@@ -1,0 +1,182 @@
+From 8375cfd35cb96d59f28a0f5f03be3945b785c5e2 Mon Sep 17 00:00:00 2001
+From: Nex <63727521+LuCiLuna@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 22:07:02 -0600
+Subject: [PATCH 146/148] Input: synaptics_tcm_i2c - let userspace pick the
+ report rate
+
+The S3908 reports at 120 Hz unless told otherwise. Stock OnePlus firmware
+raises it to 360 Hz in game mode through dynamic config 0xe6. Add a
+report_rate attribute (120, 240 or 360) that sets it, and re-apply the
+chosen rate after resume and controller recovery. Until something writes
+the attribute the firmware's default is left alone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/synaptics_tcm_i2c.c | 102 +++++++++++++++++-
+ 1 file changed, 101 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/input/touchscreen/synaptics_tcm_i2c.c b/drivers/input/touchscreen/synaptics_tcm_i2c.c
+index bce8646023d..d76b6e53f00 100644
+--- a/drivers/input/touchscreen/synaptics_tcm_i2c.c
++++ b/drivers/input/touchscreen/synaptics_tcm_i2c.c
+@@ -63,6 +63,7 @@
+ /* Dynamic config IDs. */
+ #define SYNA_DC_IN_WAKEUP_GESTURE_MODE	0x09
+ #define SYNA_DC_GESTURE_MASK		0xfe
++#define SYNA_DC_REPORT_RATE		0xe6
+ 
+ /* Status codes, i.e. header codes of a command response. */
+ #define SYNA_STATUS_IDLE		0x00
+@@ -162,6 +163,9 @@ struct syna_tcm {
+ 	bool gesture_enabled;
+ 	u32 gesture_type;
+ 
++	/* Report rate in Hz chosen through sysfs; 0 leaves the firmware's own */
++	unsigned int report_rate;
++
+ 	/* Scratch for one I2C read, and the message assembled out of them. */
+ 	u8 rxbuf[SYNA_RD_CHUNK_SIZE];
+ 	u8 payload[SYNA_MAX_MESSAGE_SIZE];
+@@ -384,6 +388,35 @@ static int syna_set_dynamic_config(struct syna_tcm *ts, u8 id, u16 value)
+ 	return syna_exec_command(ts, SYNA_CMD_SET_DYNAMIC_CONFIG, buf, sizeof(buf));
+ }
+ 
++/*
++ * Report rates and their dynamic config values, from the stock OnePlus
++ * driver. Stock runs at 120 Hz and raises the rate to 360 Hz in game mode.
++ */
++static const struct {
++	unsigned int hz;
++	u16 value;
++} syna_report_rates[] = {
++	{ 120, 0x02 },
++	{ 240, 0x03 },
++	{ 360, 0x01 },
++};
++
++/* Called with ts->lock held */
++static int syna_apply_report_rate(struct syna_tcm *ts)
++{
++	unsigned int i;
++
++	if (!ts->report_rate)
++		return 0;
++
++	for (i = 0; i < ARRAY_SIZE(syna_report_rates); i++)
++		if (syna_report_rates[i].hz == ts->report_rate)
++			return syna_set_dynamic_config(ts, SYNA_DC_REPORT_RATE,
++						       syna_report_rates[i].value);
++
++	return -EINVAL;
++}
++
+ /* Extract a big field of @bits from the report's bit stream at @offset. */
+ static u32 syna_get_bits(const u8 *buf, unsigned int buf_len,
+ 			 unsigned int offset, unsigned int bits)
+@@ -838,7 +871,11 @@ static int syna_reinit_hw(struct syna_tcm *ts)
+ 	if (ret)
+ 		return ret;
+ 
+-	return syna_exec_command(ts, SYNA_CMD_ENABLE_REPORT, &report, 1);
++	ret = syna_exec_command(ts, SYNA_CMD_ENABLE_REPORT, &report, 1);
++	if (ret)
++		return ret;
++
++	return syna_apply_report_rate(ts);
+ }
+ 
+ static int syna_probe(struct i2c_client *client)
+@@ -986,6 +1023,10 @@ static int syna_resume(struct device *dev)
+ 		if (ret)
+ 			dev_warn(dev, "failed to read touch report config: %d\n", ret);
+ 
++		ret = syna_apply_report_rate(ts);
++		if (ret)
++			dev_warn(dev, "failed to restore report rate: %d\n", ret);
++
+ 		ts->gesture_enabled = false;
+ 		ts->suspended = false;
+ 		enable_irq(client->irq);
+@@ -999,6 +1040,10 @@ static int syna_resume(struct device *dev)
+ 			ret = syna_reinit_hw(ts);
+ 			if (ret)
+ 				dev_err(dev, "failed to recover controller: %d\n", ret);
++		} else {
++			ret = syna_apply_report_rate(ts);
++			if (ret)
++				dev_warn(dev, "failed to restore report rate: %d\n", ret);
+ 		}
+ 
+ 		ts->suspended = false;
+@@ -1012,6 +1057,60 @@ static int syna_resume(struct device *dev)
+ 
+ static DEFINE_SIMPLE_DEV_PM_OPS(syna_tcm_pm_ops, syna_suspend, syna_resume);
+ 
++static ssize_t report_rate_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct syna_tcm *ts = i2c_get_clientdata(to_i2c_client(dev));
++
++	return sysfs_emit(buf, "%u\n", ts->report_rate);
++}
++
++static ssize_t report_rate_store(struct device *dev,
++				 struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct syna_tcm *ts = i2c_get_clientdata(client);
++	unsigned int hz, old, i;
++	int ret = 0;
++
++	ret = kstrtouint(buf, 10, &hz);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < ARRAY_SIZE(syna_report_rates); i++)
++		if (syna_report_rates[i].hz == hz)
++			break;
++	if (i == ARRAY_SIZE(syna_report_rates))
++		return -EINVAL;
++
++	/* Keep the IRQ thread from taking the command's response */
++	disable_irq(client->irq);
++	mutex_lock(&ts->lock);
++
++	old = ts->report_rate;
++	ts->report_rate = hz;
++
++	/* While suspended, resume applies it */
++	if (!ts->suspended) {
++		ret = syna_apply_report_rate(ts);
++		if (ret)
++			ts->report_rate = old;
++	}
++
++	mutex_unlock(&ts->lock);
++	enable_irq(client->irq);
++
++	return ret ?: count;
++}
++static DEVICE_ATTR_RW(report_rate);
++
++static struct attribute *syna_tcm_attrs[] = {
++	&dev_attr_report_rate.attr,
++	NULL
++};
++ATTRIBUTE_GROUPS(syna_tcm);
++
+ static const struct i2c_device_id syna_tcm_i2c_id[] = {
+ 	{ "synaptics-tcm" },
+ 	{ }
+@@ -1029,6 +1128,7 @@ static struct i2c_driver syna_tcm_i2c_driver = {
+ 		.name = "synaptics-tcm-i2c",
+ 		.of_match_table = syna_tcm_of_match,
+ 		.pm = pm_sleep_ptr(&syna_tcm_pm_ops),
++		.dev_groups = syna_tcm_groups,
+ 	},
+ 	.probe = syna_probe,
+ 	.id_table = syna_tcm_i2c_id,
+-- 
+2.56.0
+
