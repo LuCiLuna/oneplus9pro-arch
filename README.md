@@ -45,7 +45,7 @@ wiping the phone.
 | Vibration | ✅ | Works with Phosh feedback, including keyboard buzz |
 | Flashlight | ✅ | Quick settings toggle with adjustable brightness |
 | NFC | 🟡 | Detects cards; no app included, and tap-to-pay isn't possible |
-| Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing and basic tuning. Mono is raw only. |
+| Cameras | 🟡 | Main, ultrawide, telephoto and front work with autofocus, using software processing with stock's colour matrices. Mono is raw only. |
 | Firefox | ✅ | Phone layout with mobile sites, using `mobile-config-firefox`; smooth after the scheduler fix. YouTube's mobile page clips its left edge unless zoomed to 80% |
 | Android apps | ✅ | Waydroid with Android 13 (LineageOS 20): GPU acceleration, internet, sound and Google Play. A **Stop Android** launcher shuts it down |
 | App launching | ✅ | No loading splash, since apps here usually open before it would go away |
@@ -65,7 +65,7 @@ More detail is in [docs/STATUS.md](docs/STATUS.md).
 
 | Folder | Contents |
 |---|---|
-| [`kernel/`](kernel) | 145 patches on Linux v7.3, the kernel config and a build script |
+| [`kernel/`](kernel) | 148 patches on Linux v7.3, the kernel config and a build script |
 | [`initramfs/`](initramfs) | The early boot environment, which provides a USB rescue shell |
 | [`rootfs/`](rootfs) | Config and services to copy onto Arch Linux ARM |
 | [`userspace/`](userspace) | PKGBUILDs and patches for libcamera, hexagonrpc, iio-sensor-proxy, phoc and wlroots, the modem services and FEX |

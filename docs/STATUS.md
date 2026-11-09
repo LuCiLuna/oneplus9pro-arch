@@ -6,7 +6,9 @@ The modem features (mobile data, calls, SMS, MMS, GPS and call audio), the earpi
 limiter and charging to full were tested on the current series. Wi-Fi, sleep, video decoding, Bluetooth,
 vibration, the flashlight, NFC card detection, the buttons, the alert slider and wireless charging
 were tested after memory scaling was added, before the modem was running. The other features were
-tested on earlier builds of the series and haven't been rerun since.
+tested on earlier builds of the series and haven't been rerun since. The stock-tuning features of
+2026-11-08 (see below) were checked on the phone through registers, metadata and frame captures;
+how they look and sound hasn't been judged in daylight or by ear yet.
 
 ## Numbers
 
@@ -105,7 +107,13 @@ tested on earlier builds of the series and haven't been rerun since.
   OnePlus's, so releases ship Image, modules and initramfs, and the boot image is packed on the
   user's PC from their own `vendor_boot.img`.
 - **Headphone path:** opening the headphone output logs a SoundWire "port collision" on the RX
-  bus. Speaker playback is unaffected. Not yet checked with an analog headset attached.
+  bus. Speaker playback is unaffected. Not yet checked with an analog headset attached, including
+  stock's HiFi amplifier mode and headset mic gain from the stock-tuning work.
+- **Camera order:** libcamera's camera numbers change between boots, so `cam -c 4` isn't always the
+  main camera. Use the camera's ID (for the main camera `/base/soc@0/cci@ac4f000/i2c-bus@0/camera@1a`),
+  and PipeWire's `node.name`, not its description, for `pipewiresrc target-object=`. After an app has
+  used a camera, WirePlumber keeps its media device locked, so `cam` reports it busy until
+  WirePlumber is stopped.
 
 ## Desktop mode
 
@@ -143,6 +151,31 @@ and a faint ripple every 3 mm a finger travels on the trackpad.
 - Not done yet: docks (see Known problems) and MST hubs. The haptics driver uses the motor's
   continuous mode only; the chip's waveform modes would give crisper clicks.
 
+## Stock tuning
+
+Hardware tuning copied from stock (a dump of LineageOS's vendor files and OnePlus's kernel source):
+
+| Area | What runs now | How it was checked |
+|---|---|---|
+| Cameras | Stock's colour correction matrices for the main, ultrawide, telephoto and front cameras, from the Chromatix tuning, in the libcamera tuning files | Frames through PipeWire, as Snapshot gets them, with and without: mean saturation 0.47 → 0.61 (main) and 0.54 → 0.63 (front) in a room lit by monitors and a torch |
+| Display | High-brightness mode (600–800 nits, stock's sunlight boost) switched on above 10,000 lux by `op9-sunlight-hbm`; the slider's range is unchanged | Panel registers read back: `0x53` = `0xe0` and level 4095 in HBM, `0x28` and 2047 after |
+| Display | Optional Natural colour: sRGB mapped onto the panel's Display P3 gamut by the display engine's colour matrix (patch 0148). Vivid, the panel's native gamut, stays the default | DSPPs reserved for the built-in display; switching logs no errors. Not yet judged by eye |
+| Touch | Optional 360 Hz report rate (stock: 120 Hz, 360 Hz in game mode), patch 0146 | The controller accepts the setting; the rate hasn't been timed |
+| Headphones | Stock's class-H HiFi amplifier mode and headset mic gain (ADC2 12, about 3 dB more) | Mixer values read back; not listened to |
+
+The Natural colour and 360 Hz settings are quick settings (`userspace/phosh-op9-quick-settings`)
+that remember their state. Not copied, and why:
+
+- **Speaker processing:** stock's speaker protection, EQ and multiband DRC are NXP's algorithm in
+  the audio DSP, fed with the amplifiers' current and voltage, not something the amplifiers do. The
+  PipeWire limiter stays. See [HARDWARE.md](HARDWARE.md).
+- **Camera image quality:** stock's denoising, sharpening, tone mapping, HDR and night modes run in
+  Qualcomm's Spectra ISP and CamX, which mainline doesn't drive. libcamera's software ISP gets the
+  colour matrices only. In dim light stock uses less saturated matrices, but libcamera can't switch
+  matrices by light level, so the normal-light ones are used throughout.
+- **Brightness curve:** stock maps its slider to panel levels 0–1695 (about 500 nits) and uses
+  1696–2047 only from automatic brightness; mainline's slider covers 0–2047 directly.
+
 ## Fingerprint reader
 
 The under-display Goodix G3S is driven entirely by Qualcomm TrustZone secure apps — `goodixfp` for
@@ -167,7 +200,8 @@ auth token without that storage. The full write-up, including the RPMB UNIT ATTE
    and the install replayed from scratch with it
 5. Get a display from USB-C docks
 6. Test an analog USB-C headset and a Bluetooth headset's microphone
-7. Improve camera quality and check video recording
+7. Judge the stock camera colours in daylight, tune the sunlight HBM thresholds outdoors, time the
+   360 Hz touch rate, then improve camera quality and check video recording
 8. Add a user-facing NFC app (`neard` isn't in the Arch Linux ARM repos)
 9. Build the `userspace/` packages in CI on an ARM runner, so the install guide's package steps are
    checked on every change

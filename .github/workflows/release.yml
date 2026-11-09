@@ -25,6 +25,12 @@ jobs:
           name: op9-kernel
           path: out
 
+      # docs/releases/<tag>.md, when there is one, is the release's changelog
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: docs/releases
+
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,5 +45,10 @@ jobs:
           The firmware, the stock DTB blob and your phone's sensor calibration are not included
           and come from your phone. Follow the install guide for this tag; it erases the phone.
           NOTES
+          changes="src/docs/releases/$GITHUB_REF_NAME.md"
+          if [ -f "$changes" ]; then
+            printf '\n' >> notes.md
+            cat "$changes" >> notes.md
+          fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "OnePlus 9 Pro kernel $krel ($GITHUB_REF_NAME)" --notes-file notes.md out/*
