@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: CC0-1.0
+# OnePlus 9 Pro front camera (IMX471); the sensor black level is 64 (10-bit)
+#
+# The colour correction matrices are stock OxygenOS/LineageOS normal-light tuning
+# (com.qti.tuned.truly_imx471.bin). Stock holds each matrix flat across a colour-temperature
+# range and blends between ranges; listing each matrix at both ends of its range
+# makes libcamera's linear interpolation do the same.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Ccm:
+      ccms:
+        - ct: 2550
+          ccm: [  1.6350, -0.2980, -0.3370,
+                 -0.2698,  1.1344,  0.1354,
+                 -0.0114, -1.5334,  2.5448 ]
+        - ct: 2800
+          ccm: [  1.6682, -0.5158, -0.1524,
+                 -0.1479,  1.2902, -0.1423,
+                  0.1047, -0.8194,  1.7147 ]
+        - ct: 3350
+          ccm: [  1.6682, -0.5158, -0.1524,
+                 -0.1479,  1.2902, -0.1423,
+                  0.1047, -0.8194,  1.7147 ]
+        - ct: 3800
+          ccm: [  1.6764, -0.6343, -0.0421,
+                 -0.1719,  1.3584, -0.1865,
+                  0.1501, -0.6519,  1.5018 ]
+        - ct: 4250
+          ccm: [  1.6764, -0.6343, -0.0421,
+                 -0.1719,  1.3584, -0.1865,
+                  0.1501, -0.6519,  1.5018 ]
+        - ct: 4500
+          ccm: [  1.7233, -0.6775, -0.0458,
+                 -0.1020,  1.3212, -0.2192,
+                  0.1187, -0.5971,  1.4784 ]
+        - ct: 5400
+          ccm: [  1.7233, -0.6775, -0.0458,
+                 -0.1020,  1.3212, -0.2192,
+                  0.1187, -0.5971,  1.4784 ]
+        - ct: 6000
+          ccm: [  1.6180, -0.5172, -0.1008,
+                 -0.1766,  1.4518, -0.2752,
+                  0.0580, -0.4425,  1.3845 ]
+  - Adjust:
+  - Agc:
+...

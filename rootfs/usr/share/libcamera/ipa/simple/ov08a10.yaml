@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: CC0-1.0
+# OnePlus 9 Pro telephoto camera (OV08A10); the sensor black level is 64 (10-bit)
+#
+# The colour correction matrices are stock OxygenOS/LineageOS normal-light tuning
+# (com.qti.tuned.qtech_ov08a10.bin). Stock holds each matrix flat across a colour-temperature
+# range and blends between ranges; listing each matrix at both ends of its range
+# makes libcamera's linear interpolation do the same.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Ccm:
+      ccms:
+        - ct: 2450
+          ccm: [  1.7600, -0.7876,  0.0275,
+                 -0.2464,  1.2018,  0.0446,
+                 -0.3141, -0.8985,  2.2126 ]
+        - ct: 2650
+          ccm: [  1.6706, -0.7175,  0.0469,
+                 -0.1833,  1.1788,  0.0045,
+                 -0.1457, -0.8661,  2.0118 ]
+        - ct: 3150
+          ccm: [  1.6706, -0.7175,  0.0469,
+                 -0.1833,  1.1788,  0.0045,
+                 -0.1457, -0.8661,  2.0118 ]
+        - ct: 3650
+          ccm: [  1.8552, -1.0106,  0.1554,
+                 -0.0796,  1.1869, -0.1054,
+                  0.1147, -0.8635,  1.7489 ]
+        - ct: 4500
+          ccm: [  1.8552, -1.0106,  0.1554,
+                 -0.0796,  1.1869, -0.1054,
+                  0.1147, -0.8635,  1.7489 ]
+        - ct: 4850
+          ccm: [  1.7131, -0.8035,  0.0904,
+                 -0.1477,  1.3634, -0.2157,
+                  0.0467, -1.0926,  2.0459 ]
+  - Adjust:
+  - Agc:
+  - Af:
+...
