@@ -1,0 +1,6 @@
+[Plugin]
+Id=@id@
+Name=@name@
+Types=quick-setting;
+Comment=@comment@
+Plugin=@plugins_dir@/libphosh-plugin-@id@.so

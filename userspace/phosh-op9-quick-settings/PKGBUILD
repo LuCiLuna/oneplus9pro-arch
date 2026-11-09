@@ -1,0 +1,29 @@
+# OnePlus 9 Pro quick settings for phosh: 360 Hz touch and Natural colour.
+# Plugins use phosh's own classes, so this builds against the source of the
+# phosh version that is installed; rebuild when phosh is upgraded.
+
+pkgname=phosh-op9-quick-settings
+pkgver=1
+pkgrel=1
+_phoshver=0.57.0
+pkgdesc='OnePlus 9 Pro quick settings for phosh (touch report rate, Natural colour)'
+arch=(aarch64)
+url='https://github.com/LuCiLuna/oneplus9pro-arch'
+license=('GPL-3.0-or-later')
+depends=("phosh=$_phoshver" gtk3 libhandy glib2)
+makedepends=(meson)
+source=(meson.build meson_options.txt op9-quick-setting.c quick-setting.plugin.in
+        "https://sources.phosh.mobi/releases/phosh/phosh-$_phoshver.tar.xz")
+sha256sums=(SKIP SKIP SKIP SKIP
+            30cd0eb182b92846162ab57516170ca09fe8ce08ef95703ee351af7b9c2b9520)
+
+build() {
+  mkdir -p src
+  cp meson.build meson_options.txt op9-quick-setting.c quick-setting.plugin.in src/
+  arch-meson build src -Dphosh_src="$srcdir/phosh-$_phoshver"
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir="$pkgdir"
+}

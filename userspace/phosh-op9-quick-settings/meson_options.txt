@@ -1,0 +1,2 @@
+option('phosh_src', type: 'string', value: '',
+       description: 'Unpacked phosh source tree matching the installed phosh')

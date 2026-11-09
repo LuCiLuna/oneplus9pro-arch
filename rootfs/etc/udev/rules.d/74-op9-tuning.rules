@@ -1,0 +1,4 @@
+# Let the session's quick settings switch the touchscreen report rate and the
+# built-in display's colour mode (phosh-op9-quick-settings)
+ACTION=="bind", SUBSYSTEM=="i2c", DRIVER=="synaptics-tcm-i2c", RUN+="/bin/sh -c 'chgrp video /sys%p/report_rate && chmod g+w /sys%p/report_rate'"
+ACTION=="add", SUBSYSTEM=="module", KERNEL=="msm", RUN+="/bin/sh -c 'chgrp video /sys/module/msm/parameters/natural_colour && chmod g+w /sys/module/msm/parameters/natural_colour'"
