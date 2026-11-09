@@ -24,8 +24,8 @@ wiping the phone.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Display | ✅ | 1440x3216 and 1080x2412 at up to 120 Hz |
-| Touch | ✅ | 10 points |
+| Display | ✅ | 1440x3216 and 1080x2412 at up to 120 Hz. Stock's sunlight boost (600-800 nits) switches on in bright light. A quick setting picks Natural (sRGB) or Vivid colour |
+| Touch | ✅ | 10 points. A quick setting raises the report rate from 120 Hz to stock's 360 Hz |
 | GPU | ✅ | OpenGL 4.6, ES 3.2, Vulkan 1.3 |
 | Wi-Fi | ✅ | Up to 6 GHz, 160 MHz; the phone's own address is read from the modem at boot |
 | USB-C | ✅ | Device and host modes, 5 Gbps USB 3 |

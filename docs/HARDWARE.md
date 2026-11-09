@@ -73,5 +73,17 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
   TX_CODEC_DMA_TX_3 (the microphones). Opening the hostless VoiceMMode1 PCM starts the session.
 - **Earpiece:** it's the top TFA9874 in stock's "receiver" profile: boost converter off, input 6 dB
   down, speaker gain code 13, low-noise mode, bottom amplifier off.
+- **Stock speaker tuning:** the TFA9874 has no DSP of its own (`tfa98xx.cnt` carries a
+  `9874_dummy.patch`). Stock's speaker protection, EQ and multiband DRC are NXP's algorithm running
+  in the Qualcomm audio DSP, configured with the container's `.msg` files over APR, with the
+  amplifiers' current/voltage feedback routed back to it. Running it on mainline would need that
+  whole AFE path; Linux uses the PipeWire limiter instead.
+- **Stock camera colour:** each `com.qti.tuned.<module>.bin` is a byte-packed Chromatix file. Its
+  `cc13` colour matrices are 56-byte entries: colour-temperature start and end (float32), the 3x3
+  matrix (float32, rows R, G, B) and three offsets. The libcamera tuning files in `rootfs/` use the
+  normal-light set of each sensor.
+- **Panel:** the AMB670YF01 has Display P3 primaries, and stock does its colour modes in the
+  display engine (its panel colour-mode commands are empty). High-brightness mode is `0x53 = 0xe0`
+  with brightness 3538-4095; stock leaves panel revisions (ID2, DCS `0xdb`) below 3 out of it.
 - **Unsafe register access:** reading unclocked display or LPASS registers from Linux, for example
   through `/dev/mem`, hangs the phone. Only use `tools/regdump.c` if you know the clocks are on.

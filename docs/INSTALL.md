@@ -175,7 +175,7 @@ pacman -S --needed phosh phoc phosh-mobile-settings squeekboard gnome-console gn
     libcamera-tools snapshot firefox iw alsa-utils linux-firmware-atheros bluez bluez-utils feedbackd \
     libnotify swh-plugins zram-generator gvfs-smb gvfs-nfs gvfs-wsdd gvfs-dnssd gvfs-mtp gvfs-gphoto2 \
     gvfs-afc gvfs-goa
-systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses systemd-pstore op9-lockup-watch
+systemctl enable phosh NetworkManager bluetooth touchboost rtc-offset rtc-offset-save.timer op9-boot-successful op9-addresses systemd-pstore op9-lockup-watch op9-sunlight-hbm
 systemctl set-default graphical.target
 ```
 
@@ -256,6 +256,22 @@ Then update that folder's `pkgver` and patch.
 | `userspace/libcamera` | `libcamera-op9` | 0.7.2 | Correct white balance, sensor support and autofocus. Replaces `libcamera` and `libcamera-ipa` |
 | `userspace/hexagonrpc` | `hexagonrpc-op9` | [linux-msm/hexagonrpc](https://github.com/linux-msm/hexagonrpc) `da7a374` | Sensors: lets the DSP read and write its registry. Also creates the `fastrpc` user |
 | `userspace/iio-sensor-proxy` | `iio-sensor-proxy-op9` | 3.9 | Auto-rotate |
+
+`userspace/phosh-op9-quick-settings` isn't a patched package but two new Phosh quick settings:
+**Touch 360 Hz** (stock reaches 360 Hz only in game mode and otherwise runs at 120 Hz) and
+**Natural colour** (sRGB colours, like stock's Natural mode, instead of the panel's wide-gamut
+Vivid look). Each remembers its setting across reboots. Build it the same way, then add both to
+Quick Settings and restart Phosh:
+
+```sh
+(cd ~/op9-pkgs/phosh-op9-quick-settings && makepkg -si)
+gsettings set sm.puri.phosh.plugins quick-settings \
+    "['op9-touch-rate-quick-setting', 'op9-natural-colour-quick-setting']"
+sudo systemctl restart phosh
+```
+
+It's built against Phosh 0.57.0's source, so rebuild it with a matching `_phoshver` when Phosh
+is upgraded.
 
 After `hexagonrpc-op9` is installed, give the sensor registry to its user and start the sensors:
 
