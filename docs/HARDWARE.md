@@ -27,7 +27,7 @@ What was found while bringing up this phone, for anyone working on SM8350 or sim
 | Vibration | Awinic AW8697, I2C17 at `0x5a`, reset GPIO 75, 170 Hz motor |
 | Flash | PM8350C flash controller, channels 1 and 2 |
 | NFC | NXP SN100T, I2C15 at `0x28`, NCI 2.0; IRQ GPIO 87, enable GPIO 62, firmware GPIO 86 |
-| Fingerprint | Goodix optical G3S, behind a secure app; not supported |
+| Fingerprint | Goodix optical G3S, driven only by TrustZone secure apps; enroll blocked by boot-time secure storage, see [FINGERPRINT](FINGERPRINT.md) |
 | Battery gauge | BQ28Z610, 2 cells in series |
 | Wireless charging | IDT P9415 receiver at `0x3b` and HL7227 charge pump at `0x51`, on the I2C at `0x980000`; no drivers, the charger firmware handles basic power. PM8350C GPIO 2 turns the receiver off when high: the bootloader sets it if USB is attached at boot, and the battery driver keeps it off while USB is attached |
 | Main camera | Sony IMX789, 3-trio C-PHY, AK7377 focus at `0x0c` |

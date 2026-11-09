@@ -145,13 +145,17 @@ and a faint ripple every 3 mm a finger travels on the trackpad.
 
 ## Fingerprint reader
 
-The under-display Goodix sensor doesn't appear to be something Linux can drive directly. On stock,
-a 13 MB Qualcomm secure app (`goodixfp`) runs in the Trusted Execution Environment, and Android's
-closed libraries reach it through `QSEECom_start_app`, then sync the display's bright flash with
-each scan. Supporting it would need kernel support for loading and serving secure apps, a way to
-run the Android libraries, display sync and a bridge to `fprintd`. The secure app does run with an
-unlocked bootloader, since fingerprint unlock worked on this phone under LineageOS. Support hasn't
-been attempted on Linux.
+The under-display Goodix G3S is driven entirely by Qualcomm TrustZone secure apps — `goodixfp` for
+the sensor and `keymaster64`'s gatekeeper for the auth token an enroll needs — with the display's
+bright flash synced to each scan. A native attempt got the secure apps loading and running on
+mainline (a custom `qcom_qseecom_mobile` driver plus the RPMB and file-system listeners they call
+back into) and made the secure-storage relay work reliably. Enrollment is blocked one layer deeper:
+the gatekeeper's RPMB-backed storage was last written by stock OxygenOS, and TrustZone's
+anti-rollback — a version baseline it reads at secure boot and caches — rejects it on mainline, with
+no way to reset it from Linux. The secure app does run with an unlocked bootloader, since fingerprint
+unlock worked on this phone under LineageOS. The open path is a userspace gatekeeper that mints the
+auth token without that storage. The full write-up, including the RPMB UNIT ATTENTION fix, is in
+[FINGERPRINT.md](FINGERPRINT.md).
 
 ## Next
 

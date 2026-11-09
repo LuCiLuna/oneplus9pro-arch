@@ -57,7 +57,7 @@ wiping the phone.
 | MMS | ✅ | Sending and receiving pictures with mmsd-tng and Chatty, on AT&T |
 | GPS | ✅ | Apps get it through geoclue; first fix in about a minute outdoors without assistance data, fixes within about 11 m of each other. Turn on Location Services in Settings |
 | x86 games | 🟡 | Steam and Half-Life 2's Linux version run through the FEX emulator; Steam's interface is slow to start. Optional, see the [install guide](docs/INSTALL.md) |
-| Fingerprint | ❌ | Runs through a locked secure app; see [STATUS](docs/STATUS.md) |
+| Fingerprint | ❌ | Driven by TrustZone secure apps; the apps load on mainline but enroll hit a boot-time secure-storage wall, see [FINGERPRINT](docs/FINGERPRINT.md) |
 
 More detail is in [docs/STATUS.md](docs/STATUS.md).
 
