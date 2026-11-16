@@ -1,0 +1,254 @@
+From 7b7ed735ae147b002b370329058c8eaf1c3a9f8f Mon Sep 17 00:00:00 2001
+From: Keith Yao <i@yaofur.com>
+Date: Mon, 16 Nov 2026 11:50:46 +0100
+Subject: [PATCH 149/149] power: supply: qcom_battmgr: add charge control
+ thresholds for OnePlus
+
+A phone kept on its charger, as a server or a dashboard, sits at 100%,
+which wears a lithium battery fastest. The charging policy runs on the
+AP and already switches charging with BATT_CHG_CTRL_EN, so it can stop
+short of full too.
+
+Add charge_control_start_threshold and charge_control_end_threshold to
+the gauge's oplus-charging extension, where UPower, GNOME, KDE and TLP
+look for them. With the end below 100%, stop charging at the end and
+resume below the start; a charger attached in between doesn't charge.
+A start of 0, as UPower leaves it, or at or above the end resumes 1%
+under the end. At the default end of 100%
+the policy is unchanged.
+
+The thresholds act on the gauge's own capacity, and the status reads
+not charging while held. The extension appears only after the gauge
+probes, too late for a udev rule on add, so the module parameters
+charge_start_threshold and charge_end_threshold set them from boot;
+registering the extension also sends a change uevent now.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/power/supply/qcom_battmgr.c | 113 ++++++++++++++++++++++++++--
+ 1 file changed, 106 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 8c809091a..41d17a5e9 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -372,11 +372,15 @@ struct qcom_battmgr {
+ 	struct delayed_work chg_work;
+ 	struct notifier_block chg_pm_nb;
+ 	bool chg_reset;
++	/* charge control thresholds in %; the policy charges to full with the end at 100 */
++	int chg_start;
++	int chg_end;
+ 	struct {
+ 		bool svid;
+ 		bool capped;
+ 		bool online;
+ 		bool full;
++		int limited;
+ 		int enabled;
+ 		int polls;
+ 		int pdo_tries;
+@@ -1827,6 +1831,15 @@ static const u32 qcom_battmgr_chg_icl_steps[] = { 500000, 900000, 1200000, 15000
+ /* the zones that charge to a full battery, rather than to a lower limit */
+ #define CHG_FV_FULL		8860000
+ 
++/* the thresholds to start with, as sysfs can't set them before the gauge's extension exists */
++static int charge_start_threshold = 75;
++module_param(charge_start_threshold, int, 0444);
++MODULE_PARM_DESC(charge_start_threshold, "OnePlus: resume charging below this capacity (%)");
++
++static int charge_end_threshold = 100;
++module_param(charge_end_threshold, int, 0444);
++MODULE_PARM_DESC(charge_end_threshold, "OnePlus: stop charging at this capacity (%), 100 for full");
++
+ /* Returns the capacity to show for the gauge's @real; ends the fall from 100% once it gets there */
+ static int qcom_battmgr_ui_capacity(struct qcom_battmgr *battmgr, int real)
+ {
+@@ -1852,6 +1865,17 @@ static int qcom_battmgr_gauge_ext_get(struct power_supply *psy, const struct pow
+ 	struct qcom_battmgr *battmgr = data;
+ 	int status, ret;
+ 
++	switch (psp) {
++	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
++		val->intval = READ_ONCE(battmgr->chg_start);
++		return 0;
++	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
++		val->intval = READ_ONCE(battmgr->chg_end);
++		return 0;
++	default:
++		break;
++	}
++
+ 	ret = power_supply_get_property_direct(psy, psp, val);
+ 	if (ret)
+ 		return ret;
+@@ -1872,15 +1896,53 @@ static int qcom_battmgr_gauge_ext_get(struct power_supply *psy, const struct pow
+ 	return 0;
+ }
+ 
++static int qcom_battmgr_gauge_ext_set(struct power_supply *psy, const struct power_supply_ext *ext,
++				      void *data, enum power_supply_property psp,
++				      const union power_supply_propval *val)
++{
++	struct qcom_battmgr *battmgr = data;
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
++		if (val->intval < 0 || val->intval > 99)
++			return -EINVAL;
++		WRITE_ONCE(battmgr->chg_start, val->intval);
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
++		if (val->intval < 1 || val->intval > 100)
++			return -EINVAL;
++		WRITE_ONCE(battmgr->chg_end, val->intval);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	/* apply it now rather than at the next poll */
++	mod_delayed_work(system_freezable_wq, &battmgr->chg_work, 0);
++	return 0;
++}
++
++static int qcom_battmgr_gauge_ext_writeable(struct power_supply *psy,
++					    const struct power_supply_ext *ext,
++					    void *data, enum power_supply_property psp)
++{
++	return psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD ||
++	       psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD;
++}
++
+ static const enum power_supply_property qcom_battmgr_gauge_ext_props[] = {
+ 	POWER_SUPPLY_PROP_STATUS,
+ 	POWER_SUPPLY_PROP_CAPACITY,
++	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD,
++	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD,
+ };
+ 
+ /*
+  * The gauge decides its status by the sign of its current and sets its full
+  * flag at its own idea of the charge voltage, so a charged phone on its charger
+  * showed as charging, or as discharging under load. Speak for it as Android does.
++ * The charge control thresholds live here too, on the battery that UPower and
++ * TLP look at.
+  */
+ static const struct power_supply_ext qcom_battmgr_gauge_ext = {
+ 	.name = "oplus-charging",
+@@ -1888,6 +1950,8 @@ static const struct power_supply_ext qcom_battmgr_gauge_ext = {
+ 	.properties = qcom_battmgr_gauge_ext_props,
+ 	.num_properties = ARRAY_SIZE(qcom_battmgr_gauge_ext_props),
+ 	.get_property = qcom_battmgr_gauge_ext_get,
++	.set_property = qcom_battmgr_gauge_ext_set,
++	.property_is_writeable = qcom_battmgr_gauge_ext_writeable,
+ };
+ 
+ static void qcom_battmgr_chg_set_ui(struct qcom_battmgr *battmgr, int status, bool hold)
+@@ -1978,11 +2042,11 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ {
+ 	struct qcom_battmgr *battmgr = container_of(to_delayed_work(work), struct qcom_battmgr,
+ 						    chg_work);
+-	union power_supply_propval temp, volt, curr, status;
++	union power_supply_propval temp, volt, curr, status, cap;
+ 	u32 online, type, vbus, vmax, cmax, icl = 0, fcc, fv;
+ 	unsigned long next = CHG_POLL;
+ 	bool pd, hv = false, detach, climbing = false, enable, wireless = false, hold, falling;
+-	int zone, ret;
++	int zone, start, end, ret;
+ 
+ 	if (!battmgr->service_up)
+ 		return;
+@@ -2010,6 +2074,9 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 		if (ret)
+ 			dev_warn(battmgr->dev, "can't report charging status: %d\n", ret);
+ 		battmgr->gauge_ext = !ret;
++		/* tell udev about the new attributes */
++		if (!ret)
++			power_supply_changed(gauge);
+ 	}
+ 
+ 	mutex_lock(&battmgr->lock);
+@@ -2036,6 +2103,7 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 
+ 	if (!battmgr->chg.online) {
+ 		battmgr->chg.online = true;
++		battmgr->chg.limited = -1;
+ 		battmgr->chg.enabled = -1;
+ 		battmgr->chg.zone = -1;
+ 		pm_stay_awake(battmgr->dev);
+@@ -2133,6 +2201,29 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 		battmgr->chg.full_polls = 0;
+ 	}
+ 
++	/*
++	 * Below an end threshold of 100%, stop there and resume under the start,
++	 * as a laptop does. A charger attached in between doesn't charge. A start
++	 * of 0, which UPower leaves when it turns the limit off, or one at or above
++	 * the end resumes 1% under the end, rather than never on a charger.
++	 */
++	end = READ_ONCE(battmgr->chg_end);
++	if (end < 100) {
++		start = READ_ONCE(battmgr->chg_start);
++		if (!start || start >= end)
++			start = end - 1;
++		ret = power_supply_get_property_direct(battmgr->gauge, POWER_SUPPLY_PROP_CAPACITY,
++						       &cap);
++		if (ret)
++			goto out;
++		if (cap.intval >= end || (battmgr->chg.limited < 0 && cap.intval >= start))
++			battmgr->chg.limited = 1;
++		else if (cap.intval < start || battmgr->chg.limited < 0)
++			battmgr->chg.limited = 0;
++	} else {
++		battmgr->chg.limited = 0;
++	}
++
+ 	if (fv != battmgr->chg.fv) {
+ 		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
+ 						    BATT_VOLT_MAX, fv);
+@@ -2157,21 +2248,26 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+ 				 temp.intval / 10, abs(temp.intval) % 10);
+ 	}
+ 
+-	enable = fcc && !battmgr->chg.full;
++	enable = fcc && !battmgr->chg.full && !battmgr->chg.limited;
+ 	if (enable != battmgr->chg.enabled) {
+ 		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
+ 						    BATT_CHG_CTRL_EN, enable);
+ 		if (ret)
+ 			goto out;
+ 		if (battmgr->chg.enabled >= 0)
+-			dev_info(battmgr->dev, "charging %s: %d mV, %d mA, %d.%d C\n",
++			dev_info(battmgr->dev, "charging %s: %d mV, %d mA, %d.%d C%s\n",
+ 				 enable ? "resumed" : "stopped", volt.intval / 1000,
+-				 curr.intval / 1000, temp.intval / 10, abs(temp.intval) % 10);
++				 curr.intval / 1000, temp.intval / 10, abs(temp.intval) % 10,
++				 battmgr->chg.limited ? ", at the threshold" : "");
+ 		battmgr->chg.enabled = enable;
+ 	}
+ 
+-	/* as Android: charged, and showing 100%, from full until unplugged, recharges included */
+-	hold = battmgr->ui_hold || (battmgr->chg.full && fv >= CHG_FV_FULL);
++	/*
++	 * as Android: charged, and showing 100%, from full until unplugged, recharges
++	 * included; not while held at a threshold, as the battery isn't full then
++	 */
++	hold = !battmgr->chg.limited &&
++	       (battmgr->ui_hold || (battmgr->chg.full && fv >= CHG_FV_FULL));
+ 	qcom_battmgr_chg_set_ui(battmgr, hold ? POWER_SUPPLY_STATUS_FULL :
+ 				enable ? POWER_SUPPLY_STATUS_CHARGING :
+ 				POWER_SUPPLY_STATUS_NOT_CHARGING, hold);
+@@ -2471,6 +2567,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 		if (ret)
+ 			return ret;
+ 
++		battmgr->chg_start = clamp(charge_start_threshold, 0, 99);
++		battmgr->chg_end = clamp(charge_end_threshold, 1, 100);
++
+ 		device_init_wakeup(dev, true);
+ 
+ 		battmgr->chg_pm_nb.notifier_call = qcom_battmgr_chg_pm_notify;
+-- 
+2.55.0
+
