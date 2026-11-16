@@ -1,0 +1,4 @@
+# The charge limit UPower offers as GNOME Settings' "Preserve Battery Health":
+# start and end thresholds in %, applied by the battery driver (kernel patch 0149).
+# UPower only offers it for a battery with this property, which laptops get from its hwdb.
+SUBSYSTEM=="power_supply", KERNEL=="bq28z610-0", ENV{CHARGE_LIMIT}="75,80"

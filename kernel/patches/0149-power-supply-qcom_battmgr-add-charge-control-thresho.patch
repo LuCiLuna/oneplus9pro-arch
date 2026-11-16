@@ -1,4 +1,4 @@
-From ff2b6fb885780ae976fd56884da73640f3448637 Mon Sep 17 00:00:00 2001
+From 7b7ed735ae147b002b370329058c8eaf1c3a9f8f Mon Sep 17 00:00:00 2001
 From: Keith Yao <i@yaofur.com>
 Date: Mon, 16 Nov 2026 11:50:46 +0100
 Subject: [PATCH 149/149] power: supply: qcom_battmgr: add charge control
@@ -13,7 +13,8 @@ Add charge_control_start_threshold and charge_control_end_threshold to
 the gauge's oplus-charging extension, where UPower, GNOME, KDE and TLP
 look for them. With the end below 100%, stop charging at the end and
 resume below the start; a charger attached in between doesn't charge.
-The start stays at least 1% under the end. At the default end of 100%
+A start of 0, as UPower leaves it, or at or above the end resumes 1%
+under the end. At the default end of 100%
 the policy is unchanged.
 
 The thresholds act on the gauge's own capacity, and the status reads
@@ -24,11 +25,11 @@ registering the extension also sends a change uevent now.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- drivers/power/supply/qcom_battmgr.c | 110 ++++++++++++++++++++++++++--
- 1 file changed, 103 insertions(+), 7 deletions(-)
+ drivers/power/supply/qcom_battmgr.c | 113 ++++++++++++++++++++++++++--
+ 1 file changed, 106 insertions(+), 7 deletions(-)
 
 diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
-index 8c809091a..4dd8868e8 100644
+index 8c809091a..41d17a5e9 100644
 --- a/drivers/power/supply/qcom_battmgr.c
 +++ b/drivers/power/supply/qcom_battmgr.c
 @@ -372,11 +372,15 @@ struct qcom_battmgr {
@@ -176,18 +177,21 @@ index 8c809091a..4dd8868e8 100644
  		battmgr->chg.enabled = -1;
  		battmgr->chg.zone = -1;
  		pm_stay_awake(battmgr->dev);
-@@ -2133,6 +2201,26 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+@@ -2133,6 +2201,29 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
  		battmgr->chg.full_polls = 0;
  	}
  
 +	/*
 +	 * Below an end threshold of 100%, stop there and resume under the start,
-+	 * as a laptop does. A charger attached in between doesn't charge; a start
-+	 * at or above the end still leaves 1% between the two.
++	 * as a laptop does. A charger attached in between doesn't charge. A start
++	 * of 0, which UPower leaves when it turns the limit off, or one at or above
++	 * the end resumes 1% under the end, rather than never on a charger.
 +	 */
 +	end = READ_ONCE(battmgr->chg_end);
 +	if (end < 100) {
-+		start = min(READ_ONCE(battmgr->chg_start), end - 1);
++		start = READ_ONCE(battmgr->chg_start);
++		if (!start || start >= end)
++			start = end - 1;
 +		ret = power_supply_get_property_direct(battmgr->gauge, POWER_SUPPLY_PROP_CAPACITY,
 +						       &cap);
 +		if (ret)
@@ -203,7 +207,7 @@ index 8c809091a..4dd8868e8 100644
  	if (fv != battmgr->chg.fv) {
  		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
  						    BATT_VOLT_MAX, fv);
-@@ -2157,21 +2245,26 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
+@@ -2157,21 +2248,26 @@ static void qcom_battmgr_chg_worker(struct work_struct *work)
  				 temp.intval / 10, abs(temp.intval) % 10);
  	}
  
@@ -235,7 +239,7 @@ index 8c809091a..4dd8868e8 100644
  	qcom_battmgr_chg_set_ui(battmgr, hold ? POWER_SUPPLY_STATUS_FULL :
  				enable ? POWER_SUPPLY_STATUS_CHARGING :
  				POWER_SUPPLY_STATUS_NOT_CHARGING, hold);
-@@ -2471,6 +2564,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+@@ -2471,6 +2567,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
  		if (ret)
  			return ret;
  

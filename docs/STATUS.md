@@ -46,10 +46,13 @@ how they look and sound hasn't been judged in daylight or by ear yet.
   so `rootfs/etc/xdg/fastfetch/config.jsonc` gets its battery line from `op9-battery-line`.
 - **Charge limit:** for a phone kept on its charger. `charge_control_end_threshold` and
   `charge_control_start_threshold` on `bq28z610-0` stop charging at the end and resume below the
-  start; at the default end of 100% the phone charges to full as above. Set them from boot with
-  `options qcom_battmgr charge_start_threshold=70 charge_end_threshold=80` in `/etc/modprobe.d/`,
-  as the files only appear once the gauge has probed. Stopping and holding at a limit, with the
-  status "Not charging", were tested on a full battery; resuming below the start hasn't been seen yet.
+  start; at the default end of 100% the phone charges to full as above. GNOME Settings offers it
+  as Power → "Preserve Battery Health", at 75–80%: UPower only does for a battery with a
+  `CHARGE_LIMIT`, which `rootfs/etc/udev/rules.d/75-op9-charge-limit.rules` sets. To set it from
+  boot without UPower, put `options qcom_battmgr charge_start_threshold=70 charge_end_threshold=80`
+  in `/etc/modprobe.d/`, as the files only appear once the gauge has probed. Stopping and holding at
+  a limit, with the status "Not charging", and UPower switching it on and off were tested on a full
+  battery; resuming below the start hasn't been seen yet.
 - **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
   fired during that time, the phone stays awake with the screen off until it's next used, at about
   53 mA instead of about 40.
