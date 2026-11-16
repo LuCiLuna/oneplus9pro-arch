@@ -44,6 +44,12 @@ how they look and sound hasn't been judged in daylight or by ear yet.
   marks a full battery on its charger with Adwaita's "charged" icon, which also has a lightning
   bolt. fastfetch shows no status for a full battery and doesn't count a USB or wireless charger,
   so `rootfs/etc/xdg/fastfetch/config.jsonc` gets its battery line from `op9-battery-line`.
+- **Charge limit:** for a phone kept on its charger. `charge_control_end_threshold` and
+  `charge_control_start_threshold` on `bq28z610-0` stop charging at the end and resume below the
+  start; at the default end of 100% the phone charges to full as above. Set them from boot with
+  `options qcom_battmgr charge_start_threshold=70 charge_end_threshold=80` in `/etc/modprobe.d/`,
+  as the files only appear once the gauge has probed. Stopping and holding at a limit, with the
+  status "Not charging", were tested on a full battery; resuming below the start hasn't been seen yet.
 - **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
   fired during that time, the phone stays awake with the screen off until it's next used, at about
   53 mA instead of about 40.
