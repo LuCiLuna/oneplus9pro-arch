@@ -51,8 +51,9 @@ how they look and sound hasn't been judged in daylight or by ear yet.
   `CHARGE_LIMIT`, which `rootfs/etc/udev/rules.d/75-op9-charge-limit.rules` sets. To set it from
   boot without UPower, put `options qcom_battmgr charge_start_threshold=70 charge_end_threshold=80`
   in `/etc/modprobe.d/`, as the files only appear once the gauge has probed. Stopping and holding at
-  a limit, with the status "Not charging", and UPower switching it on and off were tested on a full
-  battery; resuming below the start hasn't been seen yet.
+  a limit, with the status "Not charging", UPower switching it on and off, and a full cycle at
+  75–80% on a PD charger were tested: charging resumed at 57% and stopped at 81%, as the policy
+  polls every 30 s.
 - **After charging:** the phone doesn't sleep while a charger is attached. If the idle timer already
   fired during that time, the phone stays awake with the screen off until it's next used, at about
   53 mA instead of about 40.
